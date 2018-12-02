@@ -1,6 +1,7 @@
 import numpy as np
 import itertools
 from .draw import _DrawingMixin
+from collections import deque
 
 __all__ = [ 'Graph' ]
 
@@ -231,6 +232,71 @@ class _HyperGraphBaseMixin():
                 edge_children_sparse.append( [ i, nodes.index( node ) ] )
 
         return np.array( edge_parents_sparse ).T, np.array( edge_children_sparse ).T
+
+    @staticmethod
+    def combineSparse( sparse_graphs ):
+        """ Combines sparse graphs into one big, unconnected graph
+
+        Args:
+            sparse_graphs : A list of sparse graphs
+
+        Returns:
+            edge_parents_sparse  : Parents for edges
+            edge_children_sparse : Children for edges
+        """
+        edge_parents, edge_children = [], []
+        total_edges, total_nodes = 0, 0
+        for ep, ec in sparse_graphs:
+            # See how many nodes and edges are in this sparse graph
+            n_edges = max( ep[0, -1], ec[0, -1] ) + 1
+            n_nodes = max( np.max( ep[1, :] ), np.max( ec[1, :] ) ) + 1
+
+            # Adjust their indices
+            ep[0, :] += total_edges
+            ec[0, :] += total_edges
+            ep[1, :] += total_nodes
+            ec[1, :] += total_nodes
+
+            # Increment the number of nodes and edges
+            total_edges += n_edges
+            total_nodes += n_nodes
+
+            # Add the to the graph
+            edge_parents.append( ep )
+            edge_children.append( ec )
+
+        # Concatenate the arrays
+        edge_parents = np.hstack( edge_parents )
+        edge_children = np.hstack( edge_children )
+        return edge_parents, edge_children
+
+    @staticmethod
+    def fromSparse( edge_parents_sparse, edge_children_sparse ):
+        """ Turn sparse format into graph
+
+        Args:
+            edge_parents_sparse  : Parents for edges
+            edge_children_sparse : Children for edges
+
+        Returns:
+            graph : The graph
+        """
+        edges = {}
+
+        for e, parent in edge_parents_sparse.T:
+            if( e not in edges ):
+                edges[e] = [ [ parent ], [] ]
+            else:
+                edges[e][0].append( parent )
+
+        for e, child in edge_children_sparse.T:
+            edges[e][1].append( child )
+
+        graph = Graph()
+        for e in sorted( edges.keys() ):
+            graph.addEdge( edges[e][0], edges[e][1] )
+
+        return graph
 
 ##########################################################################
 
