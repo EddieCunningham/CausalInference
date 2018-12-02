@@ -3,10 +3,16 @@ import numpy as np
 cimport numpy as np
 from cython.parallel import prange
 from libcpp.vector cimport vector
-
-##########################################################################################
+from libcpp.pair cimport pair
 
 """
+This file contains an optimized implementation of bredth first search
+and message passing over polytree hypergraphs.  It uses a sparse hypergraph
+format and does preprocessing to make everything fast.  Below is a small
+example (graph9) of each of the data structures used throughout this file.
+
+#############################
+
 edge_parents: Contains the parents for each edge and a linked list between nodes
 index       [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 ]
 
@@ -44,9 +50,7 @@ N_CHILDREN          [ ............. ]  Number of children
 #############################
 
 graph_meta: Meta data about the number of roots and leaves
-[ N_ROOTS, N_LEAVES, MAX_CHILD_EDGES ]
-MAX_CHILD_EDGES : Record this so that we don't have to allocate memory every time we want to
-                  fill a child edge array.  This shouldn't be too large
+[ N_ROOTS, N_LEAVES, MAX_CHILD_EDGES, MAX_PARENTS, MAX_SIBLINGS, MAX_MATES, MAX_CHILDREN ]
 
 """
 
@@ -67,6 +71,8 @@ cdef int N_CHILDREN    = 3 # N_CHILDREN
 cdef int N_ROOTS         = 0 # N_ROOTS
 cdef int N_LEAVES        = 1 # N_LEAVES
 cdef int MAX_CHILD_EDGES = 2 # MAX_CHILD_EDGES
+cdef int MAX_PARENTS     = 3 # MAX_PARENTS
+cdef int MAX_CHILDREN    = 4 # MAX_CHILDREN
 
 ###################################################################################
 
@@ -87,7 +93,7 @@ cpdef preprocessSparseGraphForTraversal( np.ndarray[int, ndim=2] edge_parents,
         edge_meta        : Meta data about for edge
         graph_meta       : Meta data about the graph
     """
-    cdef int[:] graph_meta          = np.zeros( 3, dtype=np.int32 )
+    cdef int[:] graph_meta          = np.zeros( 5, dtype=np.int32 )
     cdef int[:, :] pp_edge_parents  = np.empty( ( 3, edge_parents.shape[1] ), dtype=np.int32 )
     cdef int[:, :] pp_edge_children = np.empty( ( 2, edge_children.shape[1] ), dtype=np.int32 )
     cdef int edge_parents_length    = edge_parents.shape[1]
@@ -228,6 +234,14 @@ cpdef preprocessSparseGraphForTraversal( np.ndarray[int, ndim=2] edge_parents,
 
             if( node_meta[N_CHILD_EDGES, i] > graph_meta[MAX_CHILD_EDGES] ):
                 graph_meta[MAX_CHILD_EDGES] = node_meta[N_CHILD_EDGES, i]
+
+        for i in range( n_edges ):
+            if( edge_meta[N_PARENTS, i] > graph_meta[MAX_PARENTS] ):
+                graph_meta[MAX_PARENTS] = edge_meta[N_PARENTS, i]
+
+            if( edge_meta[N_PARENTS, i] > graph_meta[MAX_CHILDREN] ):
+                graph_meta[MAX_CHILDREN] = edge_meta[N_PARENTS, i]
+
 
     return np.asarray( pp_edge_parents ), \
            np.asarray( pp_edge_children ), \
@@ -446,6 +460,10 @@ cdef void getChildrenEdges( int[:, :] edge_parents,
     edge_parents_index = node_meta[NODE_PRNT_IDX, node]
     n_child_edges      = node_meta[N_CHILD_EDGES, node]
 
+    # Just return if this is a leaf
+    if( n_child_edges == 0 ):
+        return
+
     # Move onto the correct node
     while( edge_parents[NODE, edge_parents_index] != node ):
         edge_parents_index += 1
@@ -456,6 +474,36 @@ cdef void getChildrenEdges( int[:, :] edge_parents,
         j += 1
 
         edge_parents_index = edge_parents[NEXT_FMLY, edge_parents_index]
+
+@cython.boundscheck( False )
+@cython.wraparound( False )
+cdef int getEdgeParentIndex( int[:, :] edge_parents,
+                             int[:, :] edge_children,
+                             int[:, :] node_meta,
+                             int[:, :] edge_meta,
+                             int[:]    graph_meta,
+                             int       node,
+                             int       edge ) nogil except *:
+    """ Returns the child edges of node
+
+        Args:
+            edge_parents   : Info about edges' parent nodes
+            edge_children  : Info about edges' child nodes
+            node_meta      : Meta data about nodes
+            edge_meta      : Meta data about the edges
+            graph_meta     : Meta data about the graph
+            node           : Node to evaluate
+            edge           : A child edge of node
+
+        Returns:
+            Index in edge_parents corresponding to (edge,node)
+    """
+    cdef int index
+
+    index = edge_meta[EDGE_PRNT_IDX, edge]
+    while( edge_parents[NODE, index] != node ):
+        index += 1
+    return index
 
 ###################################################################################
 
@@ -482,9 +530,8 @@ cdef void updateNextEdgesForForwardPass( int[:, :]    edge_parents,
                                    >0 means blocked, 0 means ready, -1 means traversed.
             next_edges           : Contains the edges that are ready.  Will be modified to
                                    have the next ready edges at the end of this function.
-            output_order         : The solution array
-            current_output_index : The index of the most recent node in output_order
             child_edges_buffer   : Buffer to put the child edges
+            last_traversed_nodes : The nodes that were just traversed
 
         Returns:
             None
@@ -611,8 +658,8 @@ cpdef forwardPass( int[:, :] edge_parents,
 
         Returns:
             output_order : The order that nodes are visited during a bredth first search
-            batch_sizes  : The number of elements per batch.  Each batch can be processed
-                           in parallel
+            batch_sizes  : The number of elements per batch.  Elements within a batch
+                           can be processed in parallel
     """
     cdef int[:] edge_parents_left
     cdef int[:] output_order
@@ -680,12 +727,649 @@ cpdef forwardPass( int[:, :] edge_parents,
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cpdef accessorTest( np.ndarray[int, ndim=2] edge_parents,
-                    np.ndarray[int, ndim=2] edge_children,
-                    np.ndarray[int, ndim=2] node_meta,
-                    np.ndarray[int, ndim=2] edge_meta,
-                    np.ndarray[int, ndim=1] graph_meta ):
-    """ A test that prints out the full family for every node
+cdef void initializeMessagePassingCounts( int[:, :] edge_parents,
+                                          int[:, :] edge_children,
+                                          int[:, :] node_meta,
+                                          int[:, :] edge_meta,
+                                          int[:]    graph_meta,
+                                          int[:]    edge_parents_buffer,
+                                          int[:]    edge_children_buffer,
+                                          int[:]    u_count,
+                                          int[:]    v_count ) nogil except *:
+    """ Initialize the counts for the message passing algorithm
+
+        Args:
+            edge_parents         : Info about edges' parent nodes
+            edge_children        : Info about edges' child nodes
+            node_meta            : Meta data about nodes
+            edge_meta            : Meta data about the edges
+            graph_meta           : Meta data about the graph
+            edge_parents_buffer  : Buffer to store the result of a parents query
+            edge_children_buffer : Buffer to store the result of a children query
+            u_count              : When to proceed on U calculation for node
+            v_count              : When to proceed on V calculation for (node,edge)
+
+        Returns:
+            None
+    """
+    cdef int i
+    cdef int j
+    cdef int edge
+    cdef int node
+    cdef int parent
+    cdef int sibling
+    cdef int mate
+    cdef int child
+    cdef int edge_children_index
+    cdef int parent_edge
+    cdef int n_parents
+    cdef int n_siblings
+    cdef int n_mates
+    cdef int n_children
+
+    # These are the places where we need a U value for:
+    #  - U for all parents
+    #  - V for all parents over all child edges except node's parent edge
+    #  - V for all siblings over all child edges
+    for node in range( u_count.shape[ 0 ] ):
+
+        # Get information about the parents and siblings
+        edge_children_index = node_meta[NODE_CHDN_IDX, node]
+
+        # Check if the node is a root
+        if( edge_children_index != -1 ):
+            parent_edge         = edge_children[EDGE, edge_children_index]
+            n_parents           = edge_meta[N_PARENTS, parent_edge]
+            n_siblings          = edge_meta[N_CHILDREN, parent_edge] - 1
+            getParents( edge_parents,
+                        edge_children,
+                        node_meta,
+                        edge_meta,
+                        graph_meta,
+                        node,
+                        edge_parents_buffer )
+            getSiblings( edge_parents,
+                         edge_children,
+                         node_meta,
+                         edge_meta,
+                         graph_meta,
+                         node,
+                         edge_children_buffer )
+
+            # Increment by the number of parents and also increment by the number
+            # of total child edges over the parents that does not include node's parent edge.
+            # This is equivalent to adding the total number of down edges across
+            # every parent
+            for i in range( n_parents ):
+                parent = edge_parents_buffer[i]
+                u_count[node] += node_meta[N_CHILD_EDGES, parent]
+
+            # Increment by the number of down edges over every sibling or 1 if
+            # the child is a leaf
+            for i in range( n_siblings ):
+                sibling = edge_children_buffer[i]
+                if( node_meta[N_CHILD_EDGES, sibling] == 0 ):
+                    u_count[node] += 1
+                else:
+                    u_count[node] += node_meta[N_CHILD_EDGES, sibling]
+
+    # These are the places where we need a V value for:
+    #  - U for all mates from edge
+    #  - V for all mates over all child edges for mate except for edge
+    #  - V for all children from e over all child edges for child
+    for i in range( v_count.shape[ 0 ] ):
+        edge = edge_parents[EDGE, i]
+        node = edge_parents[NODE, i]
+
+        # Get information about the mates and children
+        n_mates    = edge_meta[N_PARENTS, edge] - 1
+        n_children = edge_meta[N_CHILDREN, edge]
+        getMates( edge_parents,
+                  edge_children,
+                  node_meta,
+                  edge_meta,
+                  graph_meta,
+                  node,
+                  edge,
+                  edge_parents_buffer )
+        getChildren( edge_parents,
+                     edge_children,
+                     node_meta,
+                     edge_meta,
+                     graph_meta,
+                     node,
+                     edge,
+                     edge_children_buffer )
+
+        # Increment by the number of mates and also increment by the number
+        # of total child edges over the mates that does not include node's parent edge.
+        # This is equivalent to adding the total number of down edges across
+        # every mate
+        for j in range( n_mates ):
+            mate = edge_parents_buffer[j]
+            v_count[i] += node_meta[N_CHILD_EDGES, mate]
+
+        # Increment by the number of down edges over every child, or 1 if
+        # the child is a leaf
+        for j in range( n_children ):
+            child = edge_children_buffer[j]
+            if( node_meta[N_CHILD_EDGES, child] == 0 ):
+                v_count[i] += 1
+            else:
+                v_count[i] += node_meta[N_CHILD_EDGES, child]
+
+    # with gil:
+    #     print( 'initial u_count', np.asarray( u_count ) )
+    #     print( 'initial v_count', np.asarray( v_count ) )
+
+@cython.boundscheck( False )
+@cython.wraparound( False )
+cdef void baseCaseMessagePassing( int[:, :] edge_parents,
+                                  int[:, :] edge_children,
+                                  int[:, :] node_meta,
+                                  int[:, :] edge_meta,
+                                  int[:]    graph_meta,
+                                  int[:]    u_output_order,
+                                  int[:, :] v_output_order,
+                                  int&      u_index,
+                                  int&      v_index,
+                                  int&      last_u_index,
+                                  int&      last_v_index,
+                                  int[:]    u_count,
+                                  int[:]    v_count,
+                                  vector[pair[int,int]]& batch_sizes,
+                                  int[:]    edge_parents_buffer,
+                                  int[:]    edge_children_buffer ) nogil except *:
+    """ Base case for message passing.  Retrieve roots only.
+        Don't need to do anything about the leaves because they
+        have a constant value
+
+        Args:
+            edge_parents         : Info about edges' parent nodes
+            edge_children        : Info about edges' child nodes
+            node_meta            : Meta data about nodes
+            edge_meta            : Meta data about the edges
+            graph_meta           : Meta data about the graph
+            u_output_order       : The order nodes are visited for computing U
+            v_output_order       : The order (edge,node) are visited in edge_parents for computing V
+            u_index              : The last valid index in u_output_order
+            v_index              : The last valid index in v_output_order
+            last_u_index         : u_index before the previous iteration
+            last_v_index         : v_index before the previous iteration
+            u_count              : When to proceed on U calculation for node
+            v_count              : When to proceed on V calculation for (node,edge)
+            batch_sizes          : The number of elements per batch.  Elements within a batch
+                                   can be processed in parallel.  First element is the elements
+                                   to take from U and second is the elements to take from V
+            edge_parents_buffer  : Buffer to store the result of a parents query
+            edge_children_buffer : Buffer to store the result of a children query
+
+        Returns:
+            None
+    """
+    cdef int node
+
+    # Find the roots and add them to the output
+    for node in range( node_meta.shape[1] ):
+        if( node_meta[NODE_CHDN_IDX, node] == -1 ):
+            u_output_order[u_index] = node
+            (&u_index)[0] += 1
+
+    # Find the leaves and add the next iteration of nodes if possible
+    for node in range( node_meta.shape[1] ):
+        if( node_meta[NODE_PRNT_IDX, node] == -1 ):
+
+            parentEdgeUpdate( edge_parents,
+                              edge_children,
+                              node_meta,
+                              edge_meta,
+                              graph_meta,
+                              u_output_order,
+                              v_output_order,
+                              u_index,
+                              v_index,
+                              u_count,
+                              v_count,
+                              edge_parents_buffer,
+                              edge_children_buffer,
+                              node )
+
+    # Note the batch size
+    # batch_sizes.push_back( pair[int,int]( graph_meta[N_ROOTS], v_index ) )
+
+    # Remember the last u and v index
+    (&last_u_index)[0] = 0
+    (&last_v_index)[0] = 0
+
+@cython.boundscheck( False )
+@cython.wraparound( False )
+cdef void parentEdgeUpdate( int[:, :] edge_parents,
+                            int[:, :] edge_children,
+                            int[:, :] node_meta,
+                            int[:, :] edge_meta,
+                            int[:]    graph_meta,
+                            int[:]    u_output_order,
+                            int[:, :] v_output_order,
+                            int&      u_index,
+                            int&      v_index,
+                            int[:]    u_count,
+                            int[:]    v_count,
+                            int[:]    edge_parents_buffer,
+                            int[:]    edge_children_buffer,
+                            int       node ) nogil except *:
+    """ Decrement u_count and v_count after a V computation at node.
+        Also update the final order if possible.
+        This function decrements v_count at (parent_edge, parent) for each parent
+        and decrements u_count at every sibling
+
+        Args:
+            edge_parents         : Info about edges' parent nodes
+            edge_children        : Info about edges' child nodes
+            node_meta            : Meta data about nodes
+            edge_meta            : Meta data about the edges
+            graph_meta           : Meta data about the graph
+            u_output_order       : The order nodes are visited for computing U
+            v_output_order       : The order (edge,node) are visited in edge_parents for computing V
+            u_index              : Last valid index in u_output_order
+            v_index              : Last valid index in v_output_order
+            u_count              : When to proceed on U calculation for node
+            v_count              : When to proceed on V calculation for (node,edge)
+            edge_parents_buffer  : Buffer to store the result of a parents query
+            edge_children_buffer : Buffer to store the result of a children query
+            node                 : Node that we just did a computation at
+
+        Returns:
+            None
+    """
+    cdef int i
+    cdef int edge_children_index
+    cdef int parent_edge
+    cdef int n_parents
+    cdef int n_siblings
+    cdef int parent
+    cdef int sibling
+    cdef int index_in_v
+
+    # Get the parent edge
+    edge_children_index = node_meta[NODE_CHDN_IDX, node]
+
+    # Check if this node is a root
+    if( edge_children_index == -1 ):
+        return
+
+    # Retrieve the parents and siblings
+    parent_edge = edge_children[EDGE, edge_children_index]
+    n_parents   = edge_meta[N_PARENTS, parent_edge]
+    n_siblings  = edge_meta[N_CHILDREN, parent_edge] - 1
+    getParents( edge_parents,
+                edge_children,
+                node_meta,
+                edge_meta,
+                graph_meta,
+                node,
+                edge_parents_buffer )
+    getSiblings( edge_parents,
+                 edge_children,
+                 node_meta,
+                 edge_meta,
+                 graph_meta,
+                 node,
+                 edge_children_buffer )
+
+    # Decrement from v_count for each parent at parent_edge and find the
+    # ready elements
+    for i in range( n_parents ):
+        parent = edge_parents_buffer[i]
+        index_in_v = getEdgeParentIndex( edge_parents,
+                                         edge_children,
+                                         node_meta,
+                                         edge_meta,
+                                         graph_meta,
+                                         parent,
+                                         parent_edge )
+        v_count[index_in_v] -= 1
+        if( v_count[index_in_v] == 0 ):
+            v_output_order[v_index,NODE] = edge_parents[NODE,index_in_v]
+            v_output_order[v_index,EDGE] = edge_parents[EDGE,index_in_v]
+            (&v_index)[0] += 1
+
+    # Decrement from u_count for each sibling and find the
+    # ready elements
+    for i in range( n_siblings ):
+        sibling = edge_children_buffer[i]
+        u_count[sibling] -= 1
+        if( u_count[sibling] == 0 ):
+            u_output_order[u_index] = sibling
+            (&u_index)[0] += 1
+
+@cython.boundscheck( False )
+@cython.wraparound( False )
+cdef void childEdgeUpdate( int[:, :] edge_parents,
+                           int[:, :] edge_children,
+                           int[:, :] node_meta,
+                           int[:, :] edge_meta,
+                           int[:]    graph_meta,
+                           int[:]    u_output_order,
+                           int[:, :] v_output_order,
+                           int&      u_index,
+                           int&      v_index,
+                           int[:]    u_count,
+                           int[:]    v_count,
+                           int[:]    edge_parents_buffer,
+                           int[:]    edge_children_buffer,
+                           int       edge,
+                           int       node ) nogil except *:
+    """ Decrement u_count and v_count after a U or V computation at node.
+        Also update the final order if possible.
+        This function decrements v_count at (edge, mate) for each mate
+        and decrements u_count at every child of edge
+
+        Args:
+            edge_parents         : Info about edges' parent nodes
+            edge_children        : Info about edges' child nodes
+            node_meta            : Meta data about nodes
+            edge_meta            : Meta data about the edges
+            graph_meta           : Meta data about the graph
+            u_output_order       : The order nodes are visited for computing U
+            v_output_order       : The order (edge,node) are visited in edge_parents for computing V
+            u_index              : Last valid index in u_output_order
+            v_index              : Last valid index in v_output_order
+            u_count              : When to proceed on U calculation for node
+            v_count              : When to proceed on V calculation for (node,edge)
+            edge_parents_buffer  : Buffer to store the result of a parents query
+            edge_children_buffer : Buffer to store the result of a children query
+            edge                 : The child edge of node
+            node                 : Node that we just did a computation at
+
+        Returns:
+            None
+    """
+    cdef int i
+    cdef int n_mates
+    cdef int n_children
+    cdef int mate
+    cdef int child
+    cdef int index_in_v
+
+    # Retrieve the mates and children for this child edge
+    n_mates    = edge_meta[N_PARENTS, edge] - 1
+    n_children = edge_meta[N_CHILDREN, edge]
+    getMates( edge_parents,
+                 edge_children,
+                 node_meta,
+                 edge_meta,
+                 graph_meta,
+                 node,
+                 edge,
+                 edge_parents_buffer )
+    getChildren( edge_parents,
+                 edge_children,
+                 node_meta,
+                 edge_meta,
+                 graph_meta,
+                 node,
+                 edge,
+                 edge_children_buffer )
+
+    # Decrement from v_count for each mate at edge and find the
+    # ready elements
+    for i in range( n_mates ):
+        mate       = edge_parents_buffer[i]
+        index_in_v = getEdgeParentIndex( edge_parents,
+                                         edge_children,
+                                         node_meta,
+                                         edge_meta,
+                                         graph_meta,
+                                         mate,
+                                         edge )
+        v_count[index_in_v] -= 1
+        if( v_count[index_in_v] == 0 ):
+            v_output_order[v_index,NODE] = edge_parents[NODE,index_in_v]
+            v_output_order[v_index,EDGE] = edge_parents[EDGE,index_in_v]
+            (&v_index)[0] += 1
+
+    # Decrement from u_count for each child and find the
+    # ready elements
+    for i in range( n_children ):
+        child = edge_children_buffer[i]
+        u_count[child] -= 1
+        if( u_count[child] == 0 ):
+            u_output_order[u_index] = child
+            (&u_index)[0] += 1
+
+@cython.boundscheck( False )
+@cython.wraparound( False )
+cdef void messagePassingStep( int[:, :]              edge_parents,
+                              int[:, :]              edge_children,
+                              int[:, :]              node_meta,
+                              int[:, :]              edge_meta,
+                              int[:]                 graph_meta,
+                              int[:]                 u_output_order,
+                              int[:, :]              v_output_order,
+                              int&                   u_index,
+                              int&                   v_index,
+                              int&                   last_u_index,
+                              int&                   last_v_index,
+                              int[:]                 u_count,
+                              int[:]                 v_count,
+                              vector[pair[int,int]]& batch_sizes,
+                              int[:]                 edge_parents_buffer,
+                              int[:]                 edge_children_buffer,
+                              int[:]                 child_edges_buffer ) nogil except *:
+    """ Perform 1 iteration of message passing
+
+        Args:
+            edge_parents         : Info about edges' parent nodes
+            edge_children        : Info about edges' child nodes
+            node_meta            : Meta data about nodes
+            edge_meta            : Meta data about the edges
+            graph_meta           : Meta data about the graph
+            u_output_order       : The order nodes are visited for computing U
+            v_output_order       : The order (edge,node) are visited in edge_parents for computing V
+            u_index              : Last valid index in u_output_order
+            v_index              : Last valid index in v_output_order
+            last_u_index         : u_index before the previous iteration
+            last_v_index         : v_index before the previous iteration
+            u_count              : When to proceed on U calculation for node
+            v_count              : When to proceed on V calculation for (node,edge)
+            batch_sizes          : The number of elements per batch.  Elements within a batch
+                                   can be processed in parallel.  First element is the elements
+                                   to take from U and second is the elements to take from V
+            edge_parents_buffer  : Buffer to store the result of a parents query
+            edge_children_buffer : Buffer to store the result of a children query
+            child_edges_buffer   : Buffer to store the result of a children edge query
+
+        Returns:
+            None
+    """
+    cdef int i
+    cdef int j
+    cdef int edge
+    cdef int comp_edge
+    cdef int node
+    cdef int parent
+    cdef int sibling
+    cdef int mate
+    cdef int child
+    cdef int n_child_edges
+    cdef int n_parents
+    cdef int n_siblings
+    cdef int n_mates
+    cdef int n_children
+    cdef int edge_children_index
+    cdef int parent_edge
+    cdef int index_in_v
+
+    cdef int initial_u_index =  u_index
+    cdef int initial_v_index =  v_index
+
+    # with gil:
+    #     print( '\nNew Step:' )
+    #     print( 'u_output_order', np.asarray( u_output_order ) )
+    #     print( 'v_output_order', np.asarray( v_output_order ) )
+    #     print( 'u_index', u_index )
+    #     print( 'v_index', v_index )
+    #     print( 'last_u_index', last_u_index )
+    #     print( 'last_v_index', last_v_index )
+    #     print( 'u_count', np.asarray( u_count ) )
+    #     print( 'v_count', np.asarray( v_count ) )
+    #     print( 'batch_sizes', batch_sizes )
+
+    # For every completed U computation:
+    #  - Decrement u_count for all children
+    #  - Decrement v_count for all mates over all child edges that node and
+    #    the mate are a part of
+    for i in range( last_u_index, initial_u_index ):
+        node          = u_output_order[i]
+        n_child_edges = node_meta[N_CHILD_EDGES, node]
+
+        # Check if this child is a leaf
+        if( n_child_edges != 0 ):
+
+            # Retrieve the child edges
+            getChildrenEdges( edge_parents,
+                              edge_children,
+                              node_meta,
+                              edge_meta,
+                              graph_meta,
+                              node,
+                              child_edges_buffer )
+
+            # Loop over the child edges
+            for j in range( n_child_edges ):
+                edge = child_edges_buffer[j]
+
+                # Decrement
+                childEdgeUpdate( edge_parents,
+                                 edge_children,
+                                 node_meta,
+                                 edge_meta,
+                                 graph_meta,
+                                 u_output_order,
+                                 v_output_order,
+                                 u_index,
+                                 v_index,
+                                 u_count,
+                                 v_count,
+                                 edge_parents_buffer,
+                                 edge_children_buffer,
+                                 edge,
+                                 node )
+
+        # with gil:
+        #     print( '\nAfter U:' )
+        #     print( 'node', node )
+        #     print( 'u_output_order', np.asarray( u_output_order ) )
+        #     print( 'v_output_order', np.asarray( v_output_order ) )
+        #     print( 'u_index', u_index )
+        #     print( 'v_index', v_index )
+        #     print( 'last_u_index', last_u_index )
+        #     print( 'last_v_index', last_v_index )
+        #     print( 'u_count', np.asarray( u_count ) )
+        #     print( 'v_count', np.asarray( v_count ) )
+        #     print( 'batch_sizes', batch_sizes )
+
+    # For every completed V computation:
+    #  - Decrement u_count for children that come from a different edge
+    #    than the one just completed
+    #  - Decrement v_count for all parents at node's up edge
+    #  - Decrement u_count for all siblings
+    #  - Decrement v_count for mates that come from a different edge
+    #    than the one just completed
+    for i in range( last_v_index, initial_v_index ):
+        node = v_output_order[i, NODE]
+        edge = v_output_order[i, EDGE]
+        n_child_edges = node_meta[N_CHILD_EDGES, node]
+
+        # Retrieve the child edges
+        getChildrenEdges( edge_parents,
+                          edge_children,
+                          node_meta,
+                          edge_meta,
+                          graph_meta,
+                          node,
+                          child_edges_buffer )
+
+        # Loop over the all of the child edges
+        for j in range( n_child_edges ):
+            comp_edge = child_edges_buffer[j]
+
+            # Skip edge
+            if( comp_edge == edge ):
+                continue
+
+            childEdgeUpdate( edge_parents,
+                             edge_children,
+                             node_meta,
+                             edge_meta,
+                             graph_meta,
+                             u_output_order,
+                             v_output_order,
+                             u_index,
+                             v_index,
+                             u_count,
+                             v_count,
+                             edge_parents_buffer,
+                             edge_children_buffer,
+                             comp_edge,
+                             node )
+
+        parentEdgeUpdate( edge_parents,
+                          edge_children,
+                          node_meta,
+                          edge_meta,
+                          graph_meta,
+                          u_output_order,
+                          v_output_order,
+                          u_index,
+                          v_index,
+                          u_count,
+                          v_count,
+                          edge_parents_buffer,
+                          edge_children_buffer,
+                          node )
+
+        # with gil:
+        #     print( '\nAfter V:' )
+        #     print( 'node', node )
+        #     print( 'edge', edge )
+        #     print( 'u_output_order', np.asarray( u_output_order ) )
+        #     print( 'v_output_order', np.asarray( v_output_order ) )
+        #     print( 'u_index', u_index )
+        #     print( 'v_index', v_index )
+        #     print( 'last_u_index', last_u_index )
+        #     print( 'last_v_index', last_v_index )
+        #     print( 'u_count', np.asarray( u_count ) )
+        #     print( 'v_count', np.asarray( v_count ) )
+        #     print( 'batch_sizes', batch_sizes )
+
+    # Note the batch size
+    batch_sizes.push_back( pair[int,int]( initial_u_index - last_u_index, initial_v_index - last_v_index ) )
+
+    # Remember the last u and v index
+    (&last_u_index)[0] = initial_u_index
+    (&last_v_index)[0] = initial_v_index
+
+    # with gil:
+    #     print( '\nAt the end of one loop:' )
+    #     print( 'u_output_order', np.asarray( u_output_order ) )
+    #     print( 'v_output_order', np.asarray( v_output_order ) )
+    #     print( 'u_index', u_index )
+    #     print( 'v_index', v_index )
+    #     print( 'last_u_index', last_u_index )
+    #     print( 'last_v_index', last_v_index )
+    #     print( 'u_count', np.asarray( u_count ) )
+    #     print( 'v_count', np.asarray( v_count ) )
+    #     print( 'batch_sizes', batch_sizes )
+
+@cython.boundscheck( False )
+@cython.wraparound( False )
+cpdef polytreeMessagePassing( int[:, :] edge_parents,
+                              int[:, :] edge_children,
+                              int[:, :] node_meta,
+                              int[:, :] edge_meta,
+                              int[:]    graph_meta ):
+    """ Message passing algorithm for polytree
 
         Args:
             edge_parents  : Info about edges' parent nodes
@@ -695,102 +1379,113 @@ cpdef accessorTest( np.ndarray[int, ndim=2] edge_parents,
             graph_meta    : Meta data about the graph
 
         Returns:
-            None
+            u_output_order : The order nodes are visited for computing U
+            v_output_order : The order (edge,node) are visited in edge_parents for computing V
+            batch_sizes    : The number of elements per batch.  Elements within a batch
+                             can be processed in parallel.  First element is the elements
+                             to take from U and second is the elements to take from V
     """
-    cdef int node
-    cdef int edge
-    cdef int edge_children_index
-    cdef int parent_edge
-    cdef int n_parents
-    cdef int n_siblings
-    cdef int[:] parents
-    cdef int[:] siblings
-    cdef int[:] mates
-    cdef int[:] children
-    cdef int[:] child_edges
+    cdef int[:] u_count
+    cdef int[:] v_count
+    cdef int[:] u_output_order
+    cdef int[:, :] v_output_order
+    cdef int u_index = 0
+    cdef int v_index = 0
+    cdef int last_u_index = 0
+    cdef int last_v_index = 0
+    cdef int progress = 0
+    cdef vector[pair[int, int]] batch_sizes
 
-    # Print the parents, siblings, mates and children for each node
-    for node in range( node_meta.shape[1] ):
+    cdef int[:] edge_parents_buffer  = np.empty( graph_meta[MAX_PARENTS], dtype=np.int32 )
+    cdef int[:] edge_children_buffer = np.empty( graph_meta[MAX_CHILDREN], dtype=np.int32 )
+    cdef int[:] child_edges_buffer   = np.empty( graph_meta[MAX_CHILD_EDGES], dtype=np.int32 )
 
-        # Get the parent edge
-        edge_children_index = node_meta[NODE_CHDN_IDX, node]
+    # We want a u for every node
+    u_count        = np.zeros( node_meta.shape[1], dtype=np.int32 )
+    u_output_order = np.zeros( node_meta.shape[1], dtype=np.int32 )
 
-        # Check if this node is a root
-        if( edge_children_index != -1 ):
+    # We want a v for every [parent, child edge] combo and include the
+    # leaves for simplicity
+    v_count        = np.zeros( edge_parents.shape[1], dtype=np.int32 )
+    v_output_order = np.zeros( ( edge_parents.shape[1], 2 ), dtype=np.int32 )
 
-            parent_edge         = edge_children[EDGE, edge_children_index]
-            n_parents           = edge_meta[N_PARENTS, parent_edge]
-            n_siblings          = edge_meta[N_CHILDREN, parent_edge] - 1
-            parents             = np.zeros( n_parents, dtype=np.int32 )
-            siblings            = np.zeros( n_siblings, dtype=np.int32 )
+    cdef int fail_safe = 0
+    with nogil:
+        # Initialize the blocking arrays
+        initializeMessagePassingCounts( edge_parents,
+                                        edge_children,
+                                        node_meta,
+                                        edge_meta,
+                                        graph_meta,
+                                        edge_parents_buffer,
+                                        edge_children_buffer,
+                                        u_count,
+                                        v_count )
 
-            # Retrieve the parents and siblings
-            getParents( edge_parents,
-                        edge_children,
-                        node_meta,
-                        edge_meta,
-                        graph_meta,
-                        node,
-                        parents )
+        # Initialize the algorithm with the roots and leaves
+        baseCaseMessagePassing( edge_parents,
+                                edge_children,
+                                node_meta,
+                                edge_meta,
+                                graph_meta,
+                                u_output_order,
+                                v_output_order,
+                                u_index,
+                                v_index,
+                                last_u_index,
+                                last_v_index,
+                                u_count,
+                                v_count,
+                                batch_sizes,
+                                edge_parents_buffer,
+                                edge_children_buffer )
 
-            getSiblings( edge_parents,
-                         edge_children,
-                         node_meta,
-                         edge_meta,
-                         graph_meta,
-                         node,
-                         siblings )
-        else:
-            parents  = np.zeros( 0, dtype=np.int32 )
-            siblings = np.zeros( 0, dtype=np.int32 )
+        while( True ):
 
-        # Iterate over each child edge
-        n_child_edges = node_meta[N_CHILD_EDGES, node]
+            progress = u_index + v_index
 
-        # Check if this node is a leaf
-        if( n_child_edges != 0 ):
-            child_edges = np.zeros( n_child_edges, dtype=np.int32 )
-            getChildrenEdges( edge_parents,
-                              edge_children,
-                              node_meta,
-                              edge_meta,
-                              graph_meta,
-                              node,
-                              child_edges )
+            # Run single step
+            messagePassingStep( edge_parents,
+                                edge_children,
+                                node_meta,
+                                edge_meta,
+                                graph_meta,
+                                u_output_order,
+                                v_output_order,
+                                u_index,
+                                v_index,
+                                last_u_index,
+                                last_v_index,
+                                u_count,
+                                v_count,
+                                batch_sizes,
+                                edge_parents_buffer,
+                                edge_children_buffer,
+                                child_edges_buffer )
 
-            for edge in child_edges:
+            # Break when we've visited all of the nodes
+            if( progress == u_index + v_index ):
+                break
 
-                # Populate the mates and siblings arrays
-                n_mates    = edge_meta[N_PARENTS, edge] - 1
-                n_children = edge_meta[N_CHILDREN, edge]
-                mates      = np.zeros( n_mates, dtype=np.int32 )
-                children   = np.zeros( n_children, dtype=np.int32 )
+            fail_safe += 1
+            if( fail_safe > 100 ):
+                with gil:
+                    assert 0
 
-                # Retrieve the mates and children
-                getMates( edge_parents,
-                          edge_children,
-                          node_meta,
-                          edge_meta,
-                          graph_meta,
-                          node,
-                          edge,
-                          mates )
+    # Check to see if the algroithm failed
+    if( u_index != u_output_order.shape[0] or
+        v_index != v_output_order.shape[0] ):
 
-                getChildren( edge_parents,
-                             edge_children,
-                             node_meta,
-                             edge_meta,
-                             graph_meta,
-                             node,
-                             edge,
-                             children )
-        else:
-            mates    = np.zeros( 0, dtype=np.int32 )
-            children = np.zeros( 0, dtype=np.int32 )
+        print( 'Final u_index', u_index, 'u_output_order.shape', u_output_order.shape )
+        print( 'Final v_index', v_index, 'v_output_order.shape', v_output_order.shape )
+        print( 'Final u_count', np.asarray( u_count ) )
+        print( 'Final v_count', np.asarray( v_count ) )
 
-        # Print the results
-        print( 'node', node,
-               'parents', np.asarray( parents ),
-               'siblings', np.asarray( siblings ),
-               'mates', np.asarray( mates ),
-               'children', np.asarray( children ) )
+        assert 0, 'Check this.  Also, haven\'t implemented loopy propogation belief yet'
+
+    # print( 'Final u_index', u_index, 'u_output_order.shape', u_output_order.shape )
+    # print( 'Final v_index', v_index, 'v_output_order.shape', v_output_order.shape )
+    # print( 'Final u_count', np.asarray( u_count ) )
+    # print( 'Final v_count', np.asarray( v_count ) )
+
+    return np.asarray( u_output_order ), np.asarray( v_output_order ), batch_sizes
