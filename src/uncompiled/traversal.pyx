@@ -3,76 +3,17 @@ import numpy as np
 cimport numpy as np
 from cython.parallel import prange
 from libcpp.vector cimport vector
+from libcpp.unordered_set cimport unordered_set
 from libcpp.pair cimport pair
+from compiled.definitions cimport *
 
 """
 This file contains an optimized implementation of bredth first search
-and message passing over polytree hypergraphs.  It uses a sparse hypergraph
-format and does preprocessing to make everything fast.  Below is a small
-example (graph9) of each of the data structures used throughout this file.
+and message passing over polytrees.  It uses a preprocessed
+sparse polytree for O(1) acesses everywhere and constant size buffers.
 
-#############################
-
-edge_parents: Contains the parents for each edge and a linked list between nodes
-index       [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 ]
-
-EDGE        [ 0, 1, 1, 2, 3, 3, 4, 4, 4, 4 ]  Edge index (child edge of node)
-NODE        [ 5, 2, 4, 4, 2, 1, 3, 5, 2, 0 ]  Node index
-NEXT_FAMILY [ 7, 4, 3,-1, 8,-1,-1,-1,-1,-1 ]  The next index in this array where node appears.  -1 if last edge for node
-
-#############################
-
-edge_children: Contains the children for each edge.  Has n_nodes elements
-index        [ 0, 1, 2, 3, 4, 5, 6, 7, 8 ]
-
-EDGE         [ 0, 1, 1, 2, 3, 3, 4, 4, 4 ]  Edge index (parent edge of node)
-NODE         [ 5, 2, 4, 4, 2, 1, 3, 5, 2 ]  Node index
-
-#############################
-
-node_meta: Location of node in edge_children and edge_parents
-index (node)        [ 0, 1, 2, 3, 4, 5 ]
-
-NODE_CHILDREN_INDEX [ ................ ]  Index of parent edge in edge_children.  -1 if root
-NODE_PARENTS_INDEX  [ ................ ]  Index of first child edge in edge_parents.  -1 if leaf
-N_CHILD_EDGES       [ ................ ]  The number of child edges
-
-#############################
-
-edge_meta: Location of edge in edge_parents
-index (edge)        [ 0, 1, 2, 3, 4 ]
-
-EDGE_PARENT_INDEX   [ ............. ]  Index of edge in edge_parents
-EDGE_CHILDREN_INDEX [ ............. ]  Index of edge in edge_children
-N_PARENTS           [ ............. ]  Number of parents
-N_CHILDREN          [ ............. ]  Number of children
-
-#############################
-
-graph_meta: Meta data about the number of roots and leaves
-[ N_ROOTS, N_LEAVES, MAX_CHILD_EDGES, MAX_PARENTS, MAX_SIBLINGS, MAX_MATES, MAX_CHILDREN ]
-
+See definitions.pxd for an overview
 """
-
-# Enums are apparently python objects....
-cdef int EDGE       = 0 # EDGE
-cdef int NODE       = 1 # NODE
-cdef int NEXT_FMLY  = 2 # NEXT_FAMILY
-
-cdef int NODE_CHDN_IDX = 0 # NODE_CHILDREN_INDEX
-cdef int NODE_PRNT_IDX = 1 # NODE_PARENTS_INDEX
-cdef int N_CHILD_EDGES = 2 # N_CHILD_EDGES
-
-cdef int EDGE_PRNT_IDX = 0 # EDGE_PARENT_INDEX
-cdef int EDGE_CHDN_IDX = 1 # EDGE_CHILDREN_INDEX
-cdef int N_PARENTS     = 2 # N_PARENTS
-cdef int N_CHILDREN    = 3 # N_CHILDREN
-
-cdef int N_ROOTS         = 0 # N_ROOTS
-cdef int N_LEAVES        = 1 # N_LEAVES
-cdef int MAX_CHILD_EDGES = 2 # MAX_CHILD_EDGES
-cdef int MAX_PARENTS     = 3 # MAX_PARENTS
-cdef int MAX_CHILDREN    = 4 # MAX_CHILDREN
 
 ###################################################################################
 
@@ -253,13 +194,13 @@ cpdef preprocessSparseGraphForTraversal( np.ndarray[int, ndim=2] edge_parents,
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cdef void getParents( int[:, :] edge_parents,
-                      int[:, :] edge_children,
-                      int[:, :] node_meta,
-                      int[:, :] edge_meta,
-                      int[:]    graph_meta,
-                      int       node,
-                      int[:]    parents ) nogil except *:
+cdef void getParents( const int[:, :] edge_parents,
+                      const int[:, :] edge_children,
+                      const int[:, :] node_meta,
+                      const int[:, :] edge_meta,
+                      const int[:]    graph_meta,
+                      int             node,
+                      int[:]          parents ) nogil except *:
     """ Finds parents of node.
 
         Args:
@@ -298,13 +239,13 @@ cdef void getParents( int[:, :] edge_parents,
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cdef void getSiblings( int[:, :] edge_parents,
-                       int[:, :] edge_children,
-                       int[:, :] node_meta,
-                       int[:, :] edge_meta,
-                       int[:]    graph_meta,
-                       int       node,
-                       int[:]    siblings ) nogil except *:
+cdef void getSiblings( const int[:, :] edge_parents,
+                       const int[:, :] edge_children,
+                       const int[:, :] node_meta,
+                       const int[:, :] edge_meta,
+                       const int[:]    graph_meta,
+                       int             node,
+                       int[:]          siblings ) nogil except *:
     """ Finds siblings of node.
 
         Args:
@@ -341,15 +282,15 @@ cdef void getSiblings( int[:, :] edge_parents,
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cdef void getMates( int[:, :] edge_parents,
-                    int[:, :] edge_children,
-                    int[:, :] node_meta,
-                    int[:, :] edge_meta,
-                    int[:]    graph_meta,
-                    int       node,
-                    int       edge,
-                    int[:]    mates,
-                    int       known_preceding_edge_index=-1 ) nogil except *:
+cdef void getMates( const int[:, :] edge_parents,
+                    const int[:, :] edge_children,
+                    const int[:, :] node_meta,
+                    const int[:, :] edge_meta,
+                    const int[:]    graph_meta,
+                    int             node,
+                    int             edge,
+                    int[:]          mates,
+                    int             known_preceding_edge_index=-1 ) nogil except *:
     """ Finds mates of node at some edge
 
         Args:
@@ -386,15 +327,15 @@ cdef void getMates( int[:, :] edge_parents,
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cdef void getChildren( int[:, :] edge_parents,
-                       int[:, :] edge_children,
-                       int[:, :] node_meta,
-                       int[:, :] edge_meta,
-                       int[:]    graph_meta,
-                       int       node,
-                       int       edge,
-                       int[:]    children,
-                       int       known_preceding_edge_index=-1 ) nogil except *:
+cdef void getChildren( const int[:, :] edge_parents,
+                       const int[:, :] edge_children,
+                       const int[:, :] node_meta,
+                       const int[:, :] edge_meta,
+                       const int[:]    graph_meta,
+                       int             node,
+                       int             edge,
+                       int[:]          children,
+                       int             known_preceding_edge_index=-1 ) nogil except *:
     """ Finds children of node at some edge
 
         Args:
@@ -430,13 +371,13 @@ cdef void getChildren( int[:, :] edge_parents,
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cdef void getChildrenEdges( int[:, :] edge_parents,
-                            int[:, :] edge_children,
-                            int[:, :] node_meta,
-                            int[:, :] edge_meta,
-                            int[:]    graph_meta,
-                            int       node,
-                            int[ : ]  children_edges ) nogil except *:
+cdef void getChildrenEdges( const int[:, :] edge_parents,
+                            const int[:, :] edge_children,
+                            const int[:, :] node_meta,
+                            const int[:, :] edge_meta,
+                            const int[:]    graph_meta,
+                            int             node,
+                            int[ : ]        children_edges ) nogil except *:
     """ Returns the child edges of node
 
         Args:
@@ -477,13 +418,13 @@ cdef void getChildrenEdges( int[:, :] edge_parents,
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cdef int getEdgeParentIndex( int[:, :] edge_parents,
-                             int[:, :] edge_children,
-                             int[:, :] node_meta,
-                             int[:, :] edge_meta,
-                             int[:]    graph_meta,
-                             int       node,
-                             int       edge ) nogil except *:
+cdef int getEdgeParentIndex( const int[:, :] edge_parents,
+                             const int[:, :] edge_children,
+                             const int[:, :] node_meta,
+                             const int[:, :] edge_meta,
+                             const int[:]    graph_meta,
+                             int             node,
+                             int             edge ) nogil except *:
     """ Returns the child edges of node
 
         Args:
@@ -509,15 +450,15 @@ cdef int getEdgeParentIndex( int[:, :] edge_parents,
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cdef void updateNextEdgesForForwardPass( int[:, :]    edge_parents,
-                                         int[:, :]    edge_children,
-                                         int[:, :]    node_meta,
-                                         int[:, :]    edge_meta,
-                                         int[:]       graph_meta,
-                                         int[:]       edge_parents_left,
-                                         vector[int]& next_edges,
-                                         int[:]       child_edges_buffer,
-                                         int[:]       last_traversed_nodes ) nogil except *:
+cdef void updateNextEdgesForForwardPass( const int[:, :] edge_parents,
+                                         const int[:, :] edge_children,
+                                         const int[:, :] node_meta,
+                                         const int[:, :] edge_meta,
+                                         const int[:]    graph_meta,
+                                         int[:]          edge_parents_left,
+                                         vector[int]&    next_edges,
+                                         int[:]          child_edges_buffer,
+                                         int[:]          last_traversed_nodes ) nogil except *:
     """ Update the
 
         Args:
@@ -573,16 +514,16 @@ cdef void updateNextEdgesForForwardPass( int[:, :]    edge_parents,
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cdef void forwardPassStep( int[:, :]    edge_parents,
-                           int[:, :]    edge_children,
-                           int[:, :]    node_meta,
-                           int[:, :]    edge_meta,
-                           int[:]       graph_meta,
-                           int[:]       edge_parents_left,
-                           vector[int]& next_edges,
-                           int[:]       output_order,
-                           int&         current_output_index,
-                           int[:]       child_edges_buffer ) nogil except *:
+cdef void forwardPassStep( const int[:, :] edge_parents,
+                           const int[:, :] edge_children,
+                           const int[:, :] node_meta,
+                           const int[:, :] edge_meta,
+                           const int[:]    graph_meta,
+                           int[:]          edge_parents_left,
+                           vector[int]&    next_edges,
+                           int[:]          output_order,
+                           int&            current_output_index,
+                           int[:]          child_edges_buffer ) nogil except *:
     """ Perform a step of bredth first search.
 
         Args:
@@ -642,12 +583,13 @@ cdef void forwardPassStep( int[:, :]    edge_parents,
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cpdef forwardPass( int[:, :] edge_parents,
-                   int[:, :] edge_children,
-                   int[:, :] node_meta,
-                   int[:, :] edge_meta,
-                   int[:]    graph_meta ):
-    """ Bredth first search on the graph
+cpdef forwardPass( const int[:, :] edge_parents,
+                   const int[:, :] edge_children,
+                   const int[:, :] node_meta,
+                   const int[:, :] edge_meta,
+                   const int[:]    graph_meta ):
+    """ Bredth first search on the graph.
+        TODO:  Clean up this code, it is implemented poorly
 
         Args:
             edge_parents  : Info about edges' parent nodes
@@ -727,15 +669,16 @@ cpdef forwardPass( int[:, :] edge_parents,
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cdef void initializeMessagePassingCounts( int[:, :] edge_parents,
-                                          int[:, :] edge_children,
-                                          int[:, :] node_meta,
-                                          int[:, :] edge_meta,
-                                          int[:]    graph_meta,
-                                          int[:]    edge_parents_buffer,
-                                          int[:]    edge_children_buffer,
-                                          int[:]    u_count,
-                                          int[:]    v_count ) nogil except *:
+cdef void initializeMessagePassingCounts( const int[:, :]           edge_parents,
+                                          const int[:, :]           edge_children,
+                                          const int[:, :]           node_meta,
+                                          const int[:, :]           edge_meta,
+                                          const int[:]              graph_meta,
+                                          const unordered_set[int]& skip,
+                                          int[:]                    edge_parents_buffer,
+                                          int[:]                    edge_children_buffer,
+                                          int[:]                    u_count,
+                                          int[:]                    v_count ) nogil except *:
     """ Initialize the counts for the message passing algorithm
 
         Args:
@@ -744,6 +687,7 @@ cdef void initializeMessagePassingCounts( int[:, :] edge_parents,
             node_meta            : Meta data about nodes
             edge_meta            : Meta data about the edges
             graph_meta           : Meta data about the graph
+            skip                 : Do not traverse nodes in here
             edge_parents_buffer  : Buffer to store the result of a parents query
             edge_children_buffer : Buffer to store the result of a children query
             u_count              : When to proceed on U calculation for node
@@ -772,6 +716,8 @@ cdef void initializeMessagePassingCounts( int[:, :] edge_parents,
     #  - V for all parents over all child edges except node's parent edge
     #  - V for all siblings over all child edges
     for node in range( u_count.shape[ 0 ] ):
+        if( skip.find( node ) != skip.end() ):
+            continue
 
         # Get information about the parents and siblings
         edge_children_index = node_meta[NODE_CHDN_IDX, node]
@@ -802,12 +748,16 @@ cdef void initializeMessagePassingCounts( int[:, :] edge_parents,
             # every parent
             for i in range( n_parents ):
                 parent = edge_parents_buffer[i]
+                if( skip.find( parent ) != skip.end() ):
+                    continue
                 u_count[node] += node_meta[N_CHILD_EDGES, parent]
 
             # Increment by the number of down edges over every sibling or 1 if
             # the child is a leaf
             for i in range( n_siblings ):
                 sibling = edge_children_buffer[i]
+                if( skip.find( sibling ) != skip.end() ):
+                    continue
                 if( node_meta[N_CHILD_EDGES, sibling] == 0 ):
                     u_count[node] += 1
                 else:
@@ -820,6 +770,8 @@ cdef void initializeMessagePassingCounts( int[:, :] edge_parents,
     for i in range( v_count.shape[ 0 ] ):
         edge = edge_parents[EDGE, i]
         node = edge_parents[NODE, i]
+        if( skip.find( node ) != skip.end() ):
+            continue
 
         # Get information about the mates and children
         n_mates    = edge_meta[N_PARENTS, edge] - 1
@@ -847,39 +799,39 @@ cdef void initializeMessagePassingCounts( int[:, :] edge_parents,
         # every mate
         for j in range( n_mates ):
             mate = edge_parents_buffer[j]
+            if( skip.find( mate ) != skip.end() ):
+                continue
             v_count[i] += node_meta[N_CHILD_EDGES, mate]
 
         # Increment by the number of down edges over every child, or 1 if
         # the child is a leaf
         for j in range( n_children ):
             child = edge_children_buffer[j]
+            if( skip.find( child ) != skip.end() ):
+                continue
             if( node_meta[N_CHILD_EDGES, child] == 0 ):
                 v_count[i] += 1
             else:
                 v_count[i] += node_meta[N_CHILD_EDGES, child]
 
-    # with gil:
-    #     print( 'initial u_count', np.asarray( u_count ) )
-    #     print( 'initial v_count', np.asarray( v_count ) )
-
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cdef void baseCaseMessagePassing( int[:, :] edge_parents,
-                                  int[:, :] edge_children,
-                                  int[:, :] node_meta,
-                                  int[:, :] edge_meta,
-                                  int[:]    graph_meta,
-                                  int[:]    u_output_order,
-                                  int[:, :] v_output_order,
-                                  int&      u_index,
-                                  int&      v_index,
-                                  int&      last_u_index,
-                                  int&      last_v_index,
-                                  int[:]    u_count,
-                                  int[:]    v_count,
-                                  vector[pair[int,int]]& batch_sizes,
-                                  int[:]    edge_parents_buffer,
-                                  int[:]    edge_children_buffer ) nogil except *:
+cdef void baseCaseMessagePassing( const int[:, :]           edge_parents,
+                                  const int[:, :]           edge_children,
+                                  const int[:, :]           node_meta,
+                                  const int[:, :]           edge_meta,
+                                  const int[:]              graph_meta,
+                                  const unordered_set[int]& skip,
+                                  int[:]                    u_output_order,
+                                  int[:, :]                 v_output_order,
+                                  int&                      u_index,
+                                  int&                      v_index,
+                                  int&                      last_u_index,
+                                  int&                      last_v_index,
+                                  int[:]                    u_count,
+                                  int[:]                    v_count,
+                                  int[:]                    edge_parents_buffer,
+                                  int[:]                    edge_children_buffer ) nogil except *:
     """ Base case for message passing.  Retrieve roots only.
         Don't need to do anything about the leaves because they
         have a constant value
@@ -890,6 +842,7 @@ cdef void baseCaseMessagePassing( int[:, :] edge_parents,
             node_meta            : Meta data about nodes
             edge_meta            : Meta data about the edges
             graph_meta           : Meta data about the graph
+            skip                 : Do not traverse nodes in here
             u_output_order       : The order nodes are visited for computing U
             v_output_order       : The order (edge,node) are visited in edge_parents for computing V
             u_index              : The last valid index in u_output_order
@@ -898,9 +851,6 @@ cdef void baseCaseMessagePassing( int[:, :] edge_parents,
             last_v_index         : v_index before the previous iteration
             u_count              : When to proceed on U calculation for node
             v_count              : When to proceed on V calculation for (node,edge)
-            batch_sizes          : The number of elements per batch.  Elements within a batch
-                                   can be processed in parallel.  First element is the elements
-                                   to take from U and second is the elements to take from V
             edge_parents_buffer  : Buffer to store the result of a parents query
             edge_children_buffer : Buffer to store the result of a children query
 
@@ -911,19 +861,37 @@ cdef void baseCaseMessagePassing( int[:, :] edge_parents,
 
     # Find the roots and add them to the output
     for node in range( node_meta.shape[1] ):
+        if( skip.find( node ) != skip.end() ):
+            continue
         if( node_meta[NODE_CHDN_IDX, node] == -1 ):
             u_output_order[u_index] = node
             (&u_index)[0] += 1
 
+#############################################
+#############################################
+#############################################
+"""
+THE PROBLEM RIGHT NOW IS THAT IF WE HAVE ANY NODES WHERE ALL OF THE PARENTS ARE
+IN THE FEEDBACK SET, THEN WE'LL NEVER GET TO IT!!!!!
+"""
+#############################################
+#############################################
+#############################################
+#############################################
+
+
     # Find the leaves and add the next iteration of nodes if possible
     for node in range( node_meta.shape[1] ):
-        if( node_meta[NODE_PRNT_IDX, node] == -1 ):
+        if( skip.find( node ) != skip.end() ):
+            continue
 
+        if( node_meta[NODE_PRNT_IDX, node] == -1 ):
             parentEdgeUpdate( edge_parents,
                               edge_children,
                               node_meta,
                               edge_meta,
                               graph_meta,
+                              skip,
                               u_output_order,
                               v_output_order,
                               u_index,
@@ -934,29 +902,27 @@ cdef void baseCaseMessagePassing( int[:, :] edge_parents,
                               edge_children_buffer,
                               node )
 
-    # Note the batch size
-    # batch_sizes.push_back( pair[int,int]( graph_meta[N_ROOTS], v_index ) )
-
     # Remember the last u and v index
     (&last_u_index)[0] = 0
     (&last_v_index)[0] = 0
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cdef void parentEdgeUpdate( int[:, :] edge_parents,
-                            int[:, :] edge_children,
-                            int[:, :] node_meta,
-                            int[:, :] edge_meta,
-                            int[:]    graph_meta,
-                            int[:]    u_output_order,
-                            int[:, :] v_output_order,
-                            int&      u_index,
-                            int&      v_index,
-                            int[:]    u_count,
-                            int[:]    v_count,
-                            int[:]    edge_parents_buffer,
-                            int[:]    edge_children_buffer,
-                            int       node ) nogil except *:
+cdef void parentEdgeUpdate( const int[:, :]           edge_parents,
+                            const int[:, :]           edge_children,
+                            const int[:, :]           node_meta,
+                            const int[:, :]           edge_meta,
+                            const int[:]              graph_meta,
+                            const unordered_set[int]& skip,
+                            int[:]                    u_output_order,
+                            int[:, :]                 v_output_order,
+                            int&                      u_index,
+                            int&                      v_index,
+                            int[:]                    u_count,
+                            int[:]                    v_count,
+                            int[:]                    edge_parents_buffer,
+                            int[:]                    edge_children_buffer,
+                            int                       node ) nogil except *:
     """ Decrement u_count and v_count after a V computation at node.
         Also update the final order if possible.
         This function decrements v_count at (parent_edge, parent) for each parent
@@ -968,6 +934,7 @@ cdef void parentEdgeUpdate( int[:, :] edge_parents,
             node_meta            : Meta data about nodes
             edge_meta            : Meta data about the edges
             graph_meta           : Meta data about the graph
+            skip                 : Do not traverse nodes in here
             u_output_order       : The order nodes are visited for computing U
             v_output_order       : The order (edge,node) are visited in edge_parents for computing V
             u_index              : Last valid index in u_output_order
@@ -1020,6 +987,8 @@ cdef void parentEdgeUpdate( int[:, :] edge_parents,
     # ready elements
     for i in range( n_parents ):
         parent = edge_parents_buffer[i]
+        if( skip.find( parent ) != skip.end() ):
+            continue
         index_in_v = getEdgeParentIndex( edge_parents,
                                          edge_children,
                                          node_meta,
@@ -1037,6 +1006,8 @@ cdef void parentEdgeUpdate( int[:, :] edge_parents,
     # ready elements
     for i in range( n_siblings ):
         sibling = edge_children_buffer[i]
+        if( skip.find( sibling ) != skip.end() ):
+            continue
         u_count[sibling] -= 1
         if( u_count[sibling] == 0 ):
             u_output_order[u_index] = sibling
@@ -1044,21 +1015,22 @@ cdef void parentEdgeUpdate( int[:, :] edge_parents,
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cdef void childEdgeUpdate( int[:, :] edge_parents,
-                           int[:, :] edge_children,
-                           int[:, :] node_meta,
-                           int[:, :] edge_meta,
-                           int[:]    graph_meta,
-                           int[:]    u_output_order,
-                           int[:, :] v_output_order,
-                           int&      u_index,
-                           int&      v_index,
-                           int[:]    u_count,
-                           int[:]    v_count,
-                           int[:]    edge_parents_buffer,
-                           int[:]    edge_children_buffer,
-                           int       edge,
-                           int       node ) nogil except *:
+cdef void childEdgeUpdate( const int[:, :]           edge_parents,
+                           const int[:, :]           edge_children,
+                           const int[:, :]           node_meta,
+                           const int[:, :]           edge_meta,
+                           const int[:]              graph_meta,
+                           const unordered_set[int]& skip,
+                           int[:]                    u_output_order,
+                           int[:, :]                 v_output_order,
+                           int&                      u_index,
+                           int&                      v_index,
+                           int[:]                    u_count,
+                           int[:]                    v_count,
+                           int[:]                    edge_parents_buffer,
+                           int[:]                    edge_children_buffer,
+                           int                       edge,
+                           int                       node ) nogil except *:
     """ Decrement u_count and v_count after a U or V computation at node.
         Also update the final order if possible.
         This function decrements v_count at (edge, mate) for each mate
@@ -1070,6 +1042,7 @@ cdef void childEdgeUpdate( int[:, :] edge_parents,
             node_meta            : Meta data about nodes
             edge_meta            : Meta data about the edges
             graph_meta           : Meta data about the graph
+            skip                 : Do not traverse nodes in here
             u_output_order       : The order nodes are visited for computing U
             v_output_order       : The order (edge,node) are visited in edge_parents for computing V
             u_index              : Last valid index in u_output_order
@@ -1115,6 +1088,8 @@ cdef void childEdgeUpdate( int[:, :] edge_parents,
     # ready elements
     for i in range( n_mates ):
         mate       = edge_parents_buffer[i]
+        if( skip.find( mate ) != skip.end() ):
+            continue
         index_in_v = getEdgeParentIndex( edge_parents,
                                          edge_children,
                                          node_meta,
@@ -1132,6 +1107,8 @@ cdef void childEdgeUpdate( int[:, :] edge_parents,
     # ready elements
     for i in range( n_children ):
         child = edge_children_buffer[i]
+        if( skip.find( child ) != skip.end() ):
+            continue
         u_count[child] -= 1
         if( u_count[child] == 0 ):
             u_output_order[u_index] = child
@@ -1139,23 +1116,24 @@ cdef void childEdgeUpdate( int[:, :] edge_parents,
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cdef void messagePassingStep( int[:, :]              edge_parents,
-                              int[:, :]              edge_children,
-                              int[:, :]              node_meta,
-                              int[:, :]              edge_meta,
-                              int[:]                 graph_meta,
-                              int[:]                 u_output_order,
-                              int[:, :]              v_output_order,
-                              int&                   u_index,
-                              int&                   v_index,
-                              int&                   last_u_index,
-                              int&                   last_v_index,
-                              int[:]                 u_count,
-                              int[:]                 v_count,
-                              vector[pair[int,int]]& batch_sizes,
-                              int[:]                 edge_parents_buffer,
-                              int[:]                 edge_children_buffer,
-                              int[:]                 child_edges_buffer ) nogil except *:
+cdef void messagePassingStep( const int[:, :]           edge_parents,
+                              const int[:, :]           edge_children,
+                              const int[:, :]           node_meta,
+                              const int[:, :]           edge_meta,
+                              const int[:]              graph_meta,
+                              const unordered_set[int]& skip,
+                              int[:]                    u_output_order,
+                              int[:, :]                 v_output_order,
+                              int&                      u_index,
+                              int&                      v_index,
+                              int&                      last_u_index,
+                              int&                      last_v_index,
+                              int[:]                    u_count,
+                              int[:]                    v_count,
+                              vector[pair[int,int]]&    batch_sizes,
+                              int[:]                    edge_parents_buffer,
+                              int[:]                    edge_children_buffer,
+                              int[:]                    child_edges_buffer ) nogil except *:
     """ Perform 1 iteration of message passing
 
         Args:
@@ -1164,6 +1142,7 @@ cdef void messagePassingStep( int[:, :]              edge_parents,
             node_meta            : Meta data about nodes
             edge_meta            : Meta data about the edges
             graph_meta           : Meta data about the graph
+            skip                 : Do not traverse nodes in here
             u_output_order       : The order nodes are visited for computing U
             v_output_order       : The order (edge,node) are visited in edge_parents for computing V
             u_index              : Last valid index in u_output_order
@@ -1202,18 +1181,17 @@ cdef void messagePassingStep( int[:, :]              edge_parents,
 
     cdef int initial_u_index =  u_index
     cdef int initial_v_index =  v_index
-
-    # with gil:
-    #     print( '\nNew Step:' )
-    #     print( 'u_output_order', np.asarray( u_output_order ) )
-    #     print( 'v_output_order', np.asarray( v_output_order ) )
-    #     print( 'u_index', u_index )
-    #     print( 'v_index', v_index )
-    #     print( 'last_u_index', last_u_index )
-    #     print( 'last_v_index', last_v_index )
-    #     print( 'u_count', np.asarray( u_count ) )
-    #     print( 'v_count', np.asarray( v_count ) )
-    #     print( 'batch_sizes', batch_sizes )
+    with gil:
+        print( '\nNew Step:' )
+        print( 'u_output_order', np.asarray( u_output_order ) )
+        print( 'v_output_order', np.asarray( v_output_order ) )
+        print( 'u_index', u_index )
+        print( 'v_index', v_index )
+        print( 'last_u_index', last_u_index )
+        print( 'last_v_index', last_v_index )
+        print( 'u_count', np.asarray( u_count ) )
+        print( 'v_count', np.asarray( v_count ) )
+        print( 'batch_sizes', batch_sizes )
 
     # For every completed U computation:
     #  - Decrement u_count for all children
@@ -1221,6 +1199,9 @@ cdef void messagePassingStep( int[:, :]              edge_parents,
     #    the mate are a part of
     for i in range( last_u_index, initial_u_index ):
         node          = u_output_order[i]
+        if( skip.find( node ) != skip.end() ):
+            continue
+
         n_child_edges = node_meta[N_CHILD_EDGES, node]
 
         # Check if this child is a leaf
@@ -1245,6 +1226,7 @@ cdef void messagePassingStep( int[:, :]              edge_parents,
                                  node_meta,
                                  edge_meta,
                                  graph_meta,
+                                 skip,
                                  u_output_order,
                                  v_output_order,
                                  u_index,
@@ -1255,19 +1237,18 @@ cdef void messagePassingStep( int[:, :]              edge_parents,
                                  edge_children_buffer,
                                  edge,
                                  node )
-
-        # with gil:
-        #     print( '\nAfter U:' )
-        #     print( 'node', node )
-        #     print( 'u_output_order', np.asarray( u_output_order ) )
-        #     print( 'v_output_order', np.asarray( v_output_order ) )
-        #     print( 'u_index', u_index )
-        #     print( 'v_index', v_index )
-        #     print( 'last_u_index', last_u_index )
-        #     print( 'last_v_index', last_v_index )
-        #     print( 'u_count', np.asarray( u_count ) )
-        #     print( 'v_count', np.asarray( v_count ) )
-        #     print( 'batch_sizes', batch_sizes )
+        with gil:
+            print( '\nAfter U:' )
+            print( 'node', node )
+            print( 'u_output_order', np.asarray( u_output_order ) )
+            print( 'v_output_order', np.asarray( v_output_order ) )
+            print( 'u_index', u_index )
+            print( 'v_index', v_index )
+            print( 'last_u_index', last_u_index )
+            print( 'last_v_index', last_v_index )
+            print( 'u_count', np.asarray( u_count ) )
+            print( 'v_count', np.asarray( v_count ) )
+            print( 'batch_sizes', batch_sizes )
 
     # For every completed V computation:
     #  - Decrement u_count for children that come from a different edge
@@ -1278,6 +1259,9 @@ cdef void messagePassingStep( int[:, :]              edge_parents,
     #    than the one just completed
     for i in range( last_v_index, initial_v_index ):
         node = v_output_order[i, NODE]
+        if( skip.find( node ) != skip.end() ):
+            continue
+
         edge = v_output_order[i, EDGE]
         n_child_edges = node_meta[N_CHILD_EDGES, node]
 
@@ -1303,6 +1287,7 @@ cdef void messagePassingStep( int[:, :]              edge_parents,
                              node_meta,
                              edge_meta,
                              graph_meta,
+                             skip,
                              u_output_order,
                              v_output_order,
                              u_index,
@@ -1319,6 +1304,7 @@ cdef void messagePassingStep( int[:, :]              edge_parents,
                           node_meta,
                           edge_meta,
                           graph_meta,
+                          skip,
                           u_output_order,
                           v_output_order,
                           u_index,
@@ -1328,20 +1314,19 @@ cdef void messagePassingStep( int[:, :]              edge_parents,
                           edge_parents_buffer,
                           edge_children_buffer,
                           node )
-
-        # with gil:
-        #     print( '\nAfter V:' )
-        #     print( 'node', node )
-        #     print( 'edge', edge )
-        #     print( 'u_output_order', np.asarray( u_output_order ) )
-        #     print( 'v_output_order', np.asarray( v_output_order ) )
-        #     print( 'u_index', u_index )
-        #     print( 'v_index', v_index )
-        #     print( 'last_u_index', last_u_index )
-        #     print( 'last_v_index', last_v_index )
-        #     print( 'u_count', np.asarray( u_count ) )
-        #     print( 'v_count', np.asarray( v_count ) )
-        #     print( 'batch_sizes', batch_sizes )
+        with gil:
+            print( '\nAfter V:' )
+            print( 'node', node )
+            print( 'edge', edge )
+            print( 'u_output_order', np.asarray( u_output_order ) )
+            print( 'v_output_order', np.asarray( v_output_order ) )
+            print( 'u_index', u_index )
+            print( 'v_index', v_index )
+            print( 'last_u_index', last_u_index )
+            print( 'last_v_index', last_v_index )
+            print( 'u_count', np.asarray( u_count ) )
+            print( 'v_count', np.asarray( v_count ) )
+            print( 'batch_sizes', batch_sizes )
 
     # Note the batch size
     batch_sizes.push_back( pair[int,int]( initial_u_index - last_u_index, initial_v_index - last_v_index ) )
@@ -1350,17 +1335,138 @@ cdef void messagePassingStep( int[:, :]              edge_parents,
     (&last_u_index)[0] = initial_u_index
     (&last_v_index)[0] = initial_v_index
 
-    # with gil:
-    #     print( '\nAt the end of one loop:' )
-    #     print( 'u_output_order', np.asarray( u_output_order ) )
-    #     print( 'v_output_order', np.asarray( v_output_order ) )
-    #     print( 'u_index', u_index )
-    #     print( 'v_index', v_index )
-    #     print( 'last_u_index', last_u_index )
-    #     print( 'last_v_index', last_v_index )
-    #     print( 'u_count', np.asarray( u_count ) )
-    #     print( 'v_count', np.asarray( v_count ) )
-    #     print( 'batch_sizes', batch_sizes )
+    with gil:
+        print( '\nAt the end of one loop:' )
+        print( 'u_output_order', np.asarray( u_output_order ) )
+        print( 'v_output_order', np.asarray( v_output_order ) )
+        print( 'u_index', u_index )
+        print( 'v_index', v_index )
+        print( 'last_u_index', last_u_index )
+        print( 'last_v_index', last_v_index )
+        print( 'u_count', np.asarray( u_count ) )
+        print( 'v_count', np.asarray( v_count ) )
+        print( 'batch_sizes', batch_sizes )
+
+# Can't include these in the pxd file for some reason
+# @cython.boundscheck( False )
+# @cython.wraparound( False )
+cdef vector[pair[int, int]] fastMessagePassing( const int[:, :]           edge_parents,
+                                                const int[:, :]           edge_children,
+                                                const int[:, :]           node_meta,
+                                                const int[:, :]           edge_meta,
+                                                const int[:]              graph_meta,
+                                                const unordered_set[int]& skip,
+                                                int[:]                    u_output_order,
+                                                int[:, :]                 v_output_order,
+                                                int[:]                    u_count,
+                                                int[:]                    v_count,
+                                                int[:]                    edge_parents_buffer,
+                                                int[:]                    edge_children_buffer,
+                                                int[:]                    child_edges_buffer ) nogil except *:
+    """ C++ guts of polytreeMessagePassing.  Returns the batch sizes
+
+        Args:
+            edge_parents         : Info about edges' parent nodes
+            edge_children        : Info about edges' child nodes
+            node_meta            : Meta data about nodes
+            edge_meta            : Meta data about the edges
+            graph_meta           : Meta data about the graph
+            skip                 : Do not traverse nodes in here
+            u_output_order       : The order nodes are visited for computing U
+            v_output_order       : The order (edge,node) are visited in edge_parents for computing V
+            u_count              : When to proceed on U calculation for node
+            v_count              : When to proceed on V calculation for (node,edge)
+            edge_parents_buffer  : Buffer to store the result of a parents query
+            edge_children_buffer : Buffer to store the result of a children query
+            child_edges_buffer   : Buffer to store the result of a children edge query
+
+        Returns:
+            batch_sizes          : The number of elements per batch.  Elements within a batch
+                                   can be processed in parallel.  First element is the elements
+                                   to take from U and second is the elements to take from V
+    """
+    cdef int progress
+    cdef int u_index = 0
+    cdef int v_index = 0
+    cdef int last_u_index = 0
+    cdef int last_v_index = 0
+    cdef vector[pair[int, int]] batch_sizes
+
+    # Initialize the blocking arrays
+    initializeMessagePassingCounts( edge_parents,
+                                    edge_children,
+                                    node_meta,
+                                    edge_meta,
+                                    graph_meta,
+                                    skip,
+                                    edge_parents_buffer,
+                                    edge_children_buffer,
+                                    u_count,
+                                    v_count )
+
+    # Initialize the algorithm with the roots and leaves
+    baseCaseMessagePassing( edge_parents,
+                            edge_children,
+                            node_meta,
+                            edge_meta,
+                            graph_meta,
+                            skip,
+                            u_output_order,
+                            v_output_order,
+                            u_index,
+                            v_index,
+                            last_u_index,
+                            last_v_index,
+                            u_count,
+                            v_count,
+                            edge_parents_buffer,
+                            edge_children_buffer )
+
+    while( True ):
+
+        progress = u_index + v_index
+
+        # Run single step
+        messagePassingStep( edge_parents,
+                            edge_children,
+                            node_meta,
+                            edge_meta,
+                            graph_meta,
+                            skip,
+                            u_output_order,
+                            v_output_order,
+                            u_index,
+                            v_index,
+                            last_u_index,
+                            last_v_index,
+                            u_count,
+                            v_count,
+                            batch_sizes,
+                            edge_parents_buffer,
+                            edge_children_buffer,
+                            child_edges_buffer )
+
+        # Break when we've visited all of the nodes
+        if( progress == u_index + v_index ):
+            break
+
+    # Check to see if the algroithm failed
+    if( u_index != u_output_order.shape[0] - skip.size() or
+        v_index != v_output_order.shape[0] - skip.size() ):
+        # Make this mean that we failed
+        # batch_sizes.clear()
+        with gil:
+
+            print( 'skip', skip )
+            print( 'u_index', u_index )
+            print( 'v_index', v_index )
+            print( 'u_output_order.shape', u_output_order.shape )
+            print( 'v_output_order.shape', v_output_order.shape )
+            print( 'Final u_count', np.asarray( u_count ) )
+            print( 'Final v_count', np.asarray( v_count ) )
+
+
+    return batch_sizes
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
@@ -1385,15 +1491,10 @@ cpdef polytreeMessagePassing( int[:, :] edge_parents,
                              can be processed in parallel.  First element is the elements
                              to take from U and second is the elements to take from V
     """
-    cdef int[:] u_count
-    cdef int[:] v_count
-    cdef int[:] u_output_order
-    cdef int[:, :] v_output_order
-    cdef int u_index = 0
-    cdef int v_index = 0
-    cdef int last_u_index = 0
-    cdef int last_v_index = 0
-    cdef int progress = 0
+    cdef int[:]                 u_count
+    cdef int[:]                 v_count
+    cdef int[:]                 u_output_order
+    cdef int[:, :]              v_output_order
     cdef vector[pair[int, int]] batch_sizes
 
     cdef int[:] edge_parents_buffer  = np.empty( graph_meta[MAX_PARENTS], dtype=np.int32 )
@@ -1404,88 +1505,22 @@ cpdef polytreeMessagePassing( int[:, :] edge_parents,
     u_count        = np.zeros( node_meta.shape[1], dtype=np.int32 )
     u_output_order = np.zeros( node_meta.shape[1], dtype=np.int32 )
 
-    # We want a v for every [parent, child edge] combo and include the
-    # leaves for simplicity
+    # We want a v for every [parent, child edge] combo
     v_count        = np.zeros( edge_parents.shape[1], dtype=np.int32 )
     v_output_order = np.zeros( ( edge_parents.shape[1], 2 ), dtype=np.int32 )
 
-    cdef int fail_safe = 0
-    with nogil:
-        # Initialize the blocking arrays
-        initializeMessagePassingCounts( edge_parents,
-                                        edge_children,
-                                        node_meta,
-                                        edge_meta,
-                                        graph_meta,
-                                        edge_parents_buffer,
-                                        edge_children_buffer,
-                                        u_count,
-                                        v_count )
-
-        # Initialize the algorithm with the roots and leaves
-        baseCaseMessagePassing( edge_parents,
-                                edge_children,
-                                node_meta,
-                                edge_meta,
-                                graph_meta,
-                                u_output_order,
-                                v_output_order,
-                                u_index,
-                                v_index,
-                                last_u_index,
-                                last_v_index,
-                                u_count,
-                                v_count,
-                                batch_sizes,
-                                edge_parents_buffer,
-                                edge_children_buffer )
-
-        while( True ):
-
-            progress = u_index + v_index
-
-            # Run single step
-            messagePassingStep( edge_parents,
-                                edge_children,
-                                node_meta,
-                                edge_meta,
-                                graph_meta,
-                                u_output_order,
-                                v_output_order,
-                                u_index,
-                                v_index,
-                                last_u_index,
-                                last_v_index,
-                                u_count,
-                                v_count,
-                                batch_sizes,
-                                edge_parents_buffer,
-                                edge_children_buffer,
-                                child_edges_buffer )
-
-            # Break when we've visited all of the nodes
-            if( progress == u_index + v_index ):
-                break
-
-            fail_safe += 1
-            if( fail_safe > 100 ):
-                with gil:
-                    assert 0
-
-    # Check to see if the algroithm failed
-    if( u_index != u_output_order.shape[0] or
-        v_index != v_output_order.shape[0] ):
-
-        print( 'Final u_index', u_index, 'u_output_order.shape', u_output_order.shape )
-        print( 'Final v_index', v_index, 'v_output_order.shape', v_output_order.shape )
-        print( 'Final u_count', np.asarray( u_count ) )
-        print( 'Final v_count', np.asarray( v_count ) )
-
-        assert 0, 'Check this.  Also, haven\'t implemented loopy propogation belief yet'
-
-    # print( 'Final u_index', u_index, 'u_output_order.shape', u_output_order.shape )
-    # print( 'Final v_index', v_index, 'v_output_order.shape', v_output_order.shape )
-    # print( 'Final u_count', np.asarray( u_count ) )
-    # print( 'Final v_count', np.asarray( v_count ) )
+    batch_sizes = fastMessagePassing( edge_parents,
+                                      edge_children,
+                                      node_meta,
+                                      edge_meta,
+                                      graph_meta,
+                                      unordered_set[int](),
+                                      u_output_order,
+                                      v_output_order,
+                                      u_count,
+                                      v_count,
+                                      edge_parents_buffer,
+                                      edge_children_buffer,
+                                      child_edges_buffer )
 
     return np.asarray( u_output_order ), np.asarray( v_output_order ), batch_sizes

@@ -10,11 +10,10 @@ class Edges():
         self.parent_edge = None
         self.child_edges = []
 
-class _HyperGraphBaseMixin():
+class _PolytreeBaseMixin():
 
     def __init__( self ):
-        """ This is the base class for hypergraphs.  Will define the hypergraph datastructure
-            and all of the accessor methods needed to use it
+        """ This is the base class for polytrees
 
         Args:
             None
@@ -300,5 +299,5 @@ class _HyperGraphBaseMixin():
 
 ##########################################################################
 
-class Graph( _HyperGraphBaseMixin, _DrawingMixin ):
+class Graph( _PolytreeBaseMixin, _DrawingMixin ):
     pass

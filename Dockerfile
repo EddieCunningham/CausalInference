@@ -5,10 +5,10 @@ USER root
 ADD ./src/uncompiled /app/compiled
 
 # Install graphviz
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends graphviz && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# RUN apt-get update && \
+#     apt-get install -y --no-install-recommends graphviz && \
+#     apt-get clean && \
+#     rm -rf /var/lib/apt/lists/*
 
 # Install the latest versions of these python packages
 RUN python -m pip install --upgrade pip && \

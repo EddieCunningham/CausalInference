@@ -4,6 +4,8 @@ from host.data.example_graphs import *
 import time
 from collections import deque
 
+__all__ = [ 'allTraversalTests' ]
+
 def processGraphs( graphs ):
     sparses = [ graph.toSparse() for graph in graphs ]
     edge_parents, edge_children = Graph.combineSparse( sparses )
@@ -70,10 +72,6 @@ def forwardPassTest():
 
     cython_order, batch_sizes = forwardPass( *big_sparse )
 
-    # print( cython_order )
-    # print( batch_sizes )
-
-
     start = time.time()
     big_sparse = processGraphs( graphs )
     cython_order, batch_sizes = forwardPass( *big_sparse )
@@ -107,6 +105,11 @@ def polytreeTest():
                polyTree6(),
                polyTree7() ]
 
+    graph = graph9()
+    edge_parents, edge_children = graph.toSparse()
+    big_sparse = preprocessSparseGraphForTraversal( edge_parents.astype( np.int32 ), edge_children.astype( np.int32 ) )
+    edge_parents, edge_children, node_meta, edge_meta, graph_meta = big_sparse
+
     sparses = [ graph.toSparse() for graph in graphs ]
     edge_parents, edge_children = Graph.combineSparse( sparses )
     if( False ):
@@ -136,3 +139,9 @@ def polytreeTest():
         print( 'v_batch_size', v_batch_size )
         print( 'u_nodes', u_nodes )
         print( 'v_edges_and_nodes', v_edges_and_nodes )
+
+
+def allTraversalTests():
+    # treeAccessorTest()
+    # forwardPassTest()
+    polytreeTest()
