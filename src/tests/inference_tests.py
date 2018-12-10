@@ -7,17 +7,9 @@ from collections import deque
 
 __all__ = [ 'allInferenceTests' ]
 
-def polytreeTest():
-    graphs = [ polyTree1(),
-               polyTree2(),
-               polyTree3(),
-               polyTree4(),
-               polyTree5(),
-               polyTree6(),
-               polyTree7() ]
+def cutTest():
 
     graphs = [ polyTree2() ]
-
 
     sparses = [ graph.toSparse() for graph in graphs ]
     edge_parents, edge_children = Graph.combineSparse( sparses )
@@ -29,6 +21,42 @@ def polytreeTest():
     big_sparse = preprocessSparseGraphForTraversal( edge_parents.astype( np.int32 ), edge_children.astype( np.int32 ) )
     edge_parents, edge_children, node_meta, edge_meta, graph_meta = big_sparse
     feedback_set = np.array( [ 0, 4, 1 ], dtype=np.int32 )
+
+    processed_results, cut_edge_parents, cut_edge_children = cutMessagePassing( edge_parents,
+                                 edge_children,
+                                 node_meta,
+                                 edge_meta,
+                                 graph_meta,
+                                 feedback_set )
+    cut_edge_parents  = np.asarray( cut_edge_parents )
+    cut_edge_children  = np.asarray( cut_edge_children )
+
+    print( 'cut_edge_parents', cut_edge_parents )
+    print( 'cut_edge_children', cut_edge_children )
+
+def polytreeTest():
+    graphs = [ polyTree1(),
+               polyTree2(),
+               polyTree3(),
+               polyTree4(),
+               polyTree5(),
+               polyTree6(),
+               polyTree7() ]
+
+    # graphs = [ polyTree2() ]
+
+
+    sparses = [ graph.toSparse() for graph in graphs ]
+    edge_parents, edge_children = Graph.combineSparse( sparses )
+    if( False ):
+        big_graph = Graph.fromSparse( edge_parents, edge_children )
+        big_graph.draw( output_folder='/app/host' )
+
+    start = time.time()
+    big_sparse = preprocessSparseGraphForTraversal( edge_parents.astype( np.int32 ), edge_children.astype( np.int32 ) )
+    edge_parents, edge_children, node_meta, edge_meta, graph_meta = big_sparse
+    feedback_set = np.array( [], dtype=np.int32 )
+    # feedback_set = np.array( [ 0, 4, 1 ], dtype=np.int32 )
     u_order, v_order, batch_sizes = inferenceInstructions( edge_parents,
                                                            edge_children,
                                                            node_meta,
@@ -37,6 +65,7 @@ def polytreeTest():
                                                            feedback_set )
     end = time.time()
 
+    print( '\n\n======================\n\n')
     print( 'Cython way took', end - start )
 
     print( 'There are', node_meta.shape[1], 'nodes' )
@@ -60,4 +89,5 @@ def polytreeTest():
 
 
 def allInferenceTests():
+    # cutTest()
     polytreeTest()

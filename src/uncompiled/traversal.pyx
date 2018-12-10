@@ -19,8 +19,8 @@ See definitions.pxd for an overview
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cpdef preprocessSparseGraphForTraversal( np.ndarray[int, ndim=2] edge_parents,
-                                         np.ndarray[int, ndim=2] edge_children ):
+cpdef preprocessSparseGraphForTraversal( int[:, :] edge_parents,
+                                         int[:, :] edge_children ):
     """ Pre-process sparse graph so that we can traverse it fast
 
     Args:
@@ -674,7 +674,6 @@ cdef void initializeMessagePassingCounts( const int[:, :]           edge_parents
                                           const int[:, :]           node_meta,
                                           const int[:, :]           edge_meta,
                                           const int[:]              graph_meta,
-                                          const unordered_set[int]& skip,
                                           int[:]                    edge_parents_buffer,
                                           int[:]                    edge_children_buffer,
                                           int[:]                    u_count,
@@ -687,7 +686,6 @@ cdef void initializeMessagePassingCounts( const int[:, :]           edge_parents
             node_meta            : Meta data about nodes
             edge_meta            : Meta data about the edges
             graph_meta           : Meta data about the graph
-            skip                 : Do not traverse nodes in here
             edge_parents_buffer  : Buffer to store the result of a parents query
             edge_children_buffer : Buffer to store the result of a children query
             u_count              : When to proceed on U calculation for node
@@ -716,8 +714,6 @@ cdef void initializeMessagePassingCounts( const int[:, :]           edge_parents
     #  - V for all parents over all child edges except node's parent edge
     #  - V for all siblings over all child edges
     for node in range( u_count.shape[ 0 ] ):
-        if( skip.find( node ) != skip.end() ):
-            continue
 
         # Get information about the parents and siblings
         edge_children_index = node_meta[NODE_CHDN_IDX, node]
@@ -748,16 +744,12 @@ cdef void initializeMessagePassingCounts( const int[:, :]           edge_parents
             # every parent
             for i in range( n_parents ):
                 parent = edge_parents_buffer[i]
-                if( skip.find( parent ) != skip.end() ):
-                    continue
                 u_count[node] += node_meta[N_CHILD_EDGES, parent]
 
             # Increment by the number of down edges over every sibling or 1 if
             # the child is a leaf
             for i in range( n_siblings ):
                 sibling = edge_children_buffer[i]
-                if( skip.find( sibling ) != skip.end() ):
-                    continue
                 if( node_meta[N_CHILD_EDGES, sibling] == 0 ):
                     u_count[node] += 1
                 else:
@@ -770,8 +762,6 @@ cdef void initializeMessagePassingCounts( const int[:, :]           edge_parents
     for i in range( v_count.shape[ 0 ] ):
         edge = edge_parents[EDGE, i]
         node = edge_parents[NODE, i]
-        if( skip.find( node ) != skip.end() ):
-            continue
 
         # Get information about the mates and children
         n_mates    = edge_meta[N_PARENTS, edge] - 1
@@ -799,16 +789,12 @@ cdef void initializeMessagePassingCounts( const int[:, :]           edge_parents
         # every mate
         for j in range( n_mates ):
             mate = edge_parents_buffer[j]
-            if( skip.find( mate ) != skip.end() ):
-                continue
             v_count[i] += node_meta[N_CHILD_EDGES, mate]
 
         # Increment by the number of down edges over every child, or 1 if
         # the child is a leaf
         for j in range( n_children ):
             child = edge_children_buffer[j]
-            if( skip.find( child ) != skip.end() ):
-                continue
             if( node_meta[N_CHILD_EDGES, child] == 0 ):
                 v_count[i] += 1
             else:
@@ -821,7 +807,6 @@ cdef void baseCaseMessagePassing( const int[:, :]           edge_parents,
                                   const int[:, :]           node_meta,
                                   const int[:, :]           edge_meta,
                                   const int[:]              graph_meta,
-                                  const unordered_set[int]& skip,
                                   int[:]                    u_output_order,
                                   int[:, :]                 v_output_order,
                                   int&                      u_index,
@@ -842,7 +827,6 @@ cdef void baseCaseMessagePassing( const int[:, :]           edge_parents,
             node_meta            : Meta data about nodes
             edge_meta            : Meta data about the edges
             graph_meta           : Meta data about the graph
-            skip                 : Do not traverse nodes in here
             u_output_order       : The order nodes are visited for computing U
             v_output_order       : The order (edge,node) are visited in edge_parents for computing V
             u_index              : The last valid index in u_output_order
@@ -861,29 +845,12 @@ cdef void baseCaseMessagePassing( const int[:, :]           edge_parents,
 
     # Find the roots and add them to the output
     for node in range( node_meta.shape[1] ):
-        if( skip.find( node ) != skip.end() ):
-            continue
         if( node_meta[NODE_CHDN_IDX, node] == -1 ):
             u_output_order[u_index] = node
             (&u_index)[0] += 1
 
-#############################################
-#############################################
-#############################################
-"""
-THE PROBLEM RIGHT NOW IS THAT IF WE HAVE ANY NODES WHERE ALL OF THE PARENTS ARE
-IN THE FEEDBACK SET, THEN WE'LL NEVER GET TO IT!!!!!
-"""
-#############################################
-#############################################
-#############################################
-#############################################
-
-
     # Find the leaves and add the next iteration of nodes if possible
     for node in range( node_meta.shape[1] ):
-        if( skip.find( node ) != skip.end() ):
-            continue
 
         if( node_meta[NODE_PRNT_IDX, node] == -1 ):
             parentEdgeUpdate( edge_parents,
@@ -891,7 +858,6 @@ IN THE FEEDBACK SET, THEN WE'LL NEVER GET TO IT!!!!!
                               node_meta,
                               edge_meta,
                               graph_meta,
-                              skip,
                               u_output_order,
                               v_output_order,
                               u_index,
@@ -913,7 +879,6 @@ cdef void parentEdgeUpdate( const int[:, :]           edge_parents,
                             const int[:, :]           node_meta,
                             const int[:, :]           edge_meta,
                             const int[:]              graph_meta,
-                            const unordered_set[int]& skip,
                             int[:]                    u_output_order,
                             int[:, :]                 v_output_order,
                             int&                      u_index,
@@ -934,7 +899,6 @@ cdef void parentEdgeUpdate( const int[:, :]           edge_parents,
             node_meta            : Meta data about nodes
             edge_meta            : Meta data about the edges
             graph_meta           : Meta data about the graph
-            skip                 : Do not traverse nodes in here
             u_output_order       : The order nodes are visited for computing U
             v_output_order       : The order (edge,node) are visited in edge_parents for computing V
             u_index              : Last valid index in u_output_order
@@ -987,8 +951,6 @@ cdef void parentEdgeUpdate( const int[:, :]           edge_parents,
     # ready elements
     for i in range( n_parents ):
         parent = edge_parents_buffer[i]
-        if( skip.find( parent ) != skip.end() ):
-            continue
         index_in_v = getEdgeParentIndex( edge_parents,
                                          edge_children,
                                          node_meta,
@@ -1006,8 +968,6 @@ cdef void parentEdgeUpdate( const int[:, :]           edge_parents,
     # ready elements
     for i in range( n_siblings ):
         sibling = edge_children_buffer[i]
-        if( skip.find( sibling ) != skip.end() ):
-            continue
         u_count[sibling] -= 1
         if( u_count[sibling] == 0 ):
             u_output_order[u_index] = sibling
@@ -1020,7 +980,6 @@ cdef void childEdgeUpdate( const int[:, :]           edge_parents,
                            const int[:, :]           node_meta,
                            const int[:, :]           edge_meta,
                            const int[:]              graph_meta,
-                           const unordered_set[int]& skip,
                            int[:]                    u_output_order,
                            int[:, :]                 v_output_order,
                            int&                      u_index,
@@ -1042,7 +1001,6 @@ cdef void childEdgeUpdate( const int[:, :]           edge_parents,
             node_meta            : Meta data about nodes
             edge_meta            : Meta data about the edges
             graph_meta           : Meta data about the graph
-            skip                 : Do not traverse nodes in here
             u_output_order       : The order nodes are visited for computing U
             v_output_order       : The order (edge,node) are visited in edge_parents for computing V
             u_index              : Last valid index in u_output_order
@@ -1088,8 +1046,6 @@ cdef void childEdgeUpdate( const int[:, :]           edge_parents,
     # ready elements
     for i in range( n_mates ):
         mate       = edge_parents_buffer[i]
-        if( skip.find( mate ) != skip.end() ):
-            continue
         index_in_v = getEdgeParentIndex( edge_parents,
                                          edge_children,
                                          node_meta,
@@ -1107,8 +1063,6 @@ cdef void childEdgeUpdate( const int[:, :]           edge_parents,
     # ready elements
     for i in range( n_children ):
         child = edge_children_buffer[i]
-        if( skip.find( child ) != skip.end() ):
-            continue
         u_count[child] -= 1
         if( u_count[child] == 0 ):
             u_output_order[u_index] = child
@@ -1121,7 +1075,6 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
                               const int[:, :]           node_meta,
                               const int[:, :]           edge_meta,
                               const int[:]              graph_meta,
-                              const unordered_set[int]& skip,
                               int[:]                    u_output_order,
                               int[:, :]                 v_output_order,
                               int&                      u_index,
@@ -1142,7 +1095,6 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
             node_meta            : Meta data about nodes
             edge_meta            : Meta data about the edges
             graph_meta           : Meta data about the graph
-            skip                 : Do not traverse nodes in here
             u_output_order       : The order nodes are visited for computing U
             v_output_order       : The order (edge,node) are visited in edge_parents for computing V
             u_index              : Last valid index in u_output_order
@@ -1181,17 +1133,17 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
 
     cdef int initial_u_index =  u_index
     cdef int initial_v_index =  v_index
-    with gil:
-        print( '\nNew Step:' )
-        print( 'u_output_order', np.asarray( u_output_order ) )
-        print( 'v_output_order', np.asarray( v_output_order ) )
-        print( 'u_index', u_index )
-        print( 'v_index', v_index )
-        print( 'last_u_index', last_u_index )
-        print( 'last_v_index', last_v_index )
-        print( 'u_count', np.asarray( u_count ) )
-        print( 'v_count', np.asarray( v_count ) )
-        print( 'batch_sizes', batch_sizes )
+    # with gil:
+    #     print( '\nNew Step:' )
+    #     print( 'u_output_order', np.asarray( u_output_order ) )
+    #     print( 'v_output_order', np.asarray( v_output_order ) )
+    #     print( 'u_index', u_index )
+    #     print( 'v_index', v_index )
+    #     print( 'last_u_index', last_u_index )
+    #     print( 'last_v_index', last_v_index )
+    #     print( 'u_count', np.asarray( u_count ) )
+    #     print( 'v_count', np.asarray( v_count ) )
+    #     print( 'batch_sizes', batch_sizes )
 
     # For every completed U computation:
     #  - Decrement u_count for all children
@@ -1199,9 +1151,6 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
     #    the mate are a part of
     for i in range( last_u_index, initial_u_index ):
         node          = u_output_order[i]
-        if( skip.find( node ) != skip.end() ):
-            continue
-
         n_child_edges = node_meta[N_CHILD_EDGES, node]
 
         # Check if this child is a leaf
@@ -1226,7 +1175,6 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
                                  node_meta,
                                  edge_meta,
                                  graph_meta,
-                                 skip,
                                  u_output_order,
                                  v_output_order,
                                  u_index,
@@ -1237,18 +1185,18 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
                                  edge_children_buffer,
                                  edge,
                                  node )
-        with gil:
-            print( '\nAfter U:' )
-            print( 'node', node )
-            print( 'u_output_order', np.asarray( u_output_order ) )
-            print( 'v_output_order', np.asarray( v_output_order ) )
-            print( 'u_index', u_index )
-            print( 'v_index', v_index )
-            print( 'last_u_index', last_u_index )
-            print( 'last_v_index', last_v_index )
-            print( 'u_count', np.asarray( u_count ) )
-            print( 'v_count', np.asarray( v_count ) )
-            print( 'batch_sizes', batch_sizes )
+        # with gil:
+        #     print( '\nAfter U:' )
+        #     print( 'node', node )
+        #     print( 'u_output_order', np.asarray( u_output_order ) )
+        #     print( 'v_output_order', np.asarray( v_output_order ) )
+        #     print( 'u_index', u_index )
+        #     print( 'v_index', v_index )
+        #     print( 'last_u_index', last_u_index )
+        #     print( 'last_v_index', last_v_index )
+        #     print( 'u_count', np.asarray( u_count ) )
+        #     print( 'v_count', np.asarray( v_count ) )
+        #     print( 'batch_sizes', batch_sizes )
 
     # For every completed V computation:
     #  - Decrement u_count for children that come from a different edge
@@ -1259,9 +1207,6 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
     #    than the one just completed
     for i in range( last_v_index, initial_v_index ):
         node = v_output_order[i, NODE]
-        if( skip.find( node ) != skip.end() ):
-            continue
-
         edge = v_output_order[i, EDGE]
         n_child_edges = node_meta[N_CHILD_EDGES, node]
 
@@ -1287,7 +1232,6 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
                              node_meta,
                              edge_meta,
                              graph_meta,
-                             skip,
                              u_output_order,
                              v_output_order,
                              u_index,
@@ -1304,7 +1248,6 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
                           node_meta,
                           edge_meta,
                           graph_meta,
-                          skip,
                           u_output_order,
                           v_output_order,
                           u_index,
@@ -1314,19 +1257,19 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
                           edge_parents_buffer,
                           edge_children_buffer,
                           node )
-        with gil:
-            print( '\nAfter V:' )
-            print( 'node', node )
-            print( 'edge', edge )
-            print( 'u_output_order', np.asarray( u_output_order ) )
-            print( 'v_output_order', np.asarray( v_output_order ) )
-            print( 'u_index', u_index )
-            print( 'v_index', v_index )
-            print( 'last_u_index', last_u_index )
-            print( 'last_v_index', last_v_index )
-            print( 'u_count', np.asarray( u_count ) )
-            print( 'v_count', np.asarray( v_count ) )
-            print( 'batch_sizes', batch_sizes )
+        # with gil:
+        #     print( '\nAfter V:' )
+        #     print( 'node', node )
+        #     print( 'edge', edge )
+        #     print( 'u_output_order', np.asarray( u_output_order ) )
+        #     print( 'v_output_order', np.asarray( v_output_order ) )
+        #     print( 'u_index', u_index )
+        #     print( 'v_index', v_index )
+        #     print( 'last_u_index', last_u_index )
+        #     print( 'last_v_index', last_v_index )
+        #     print( 'u_count', np.asarray( u_count ) )
+        #     print( 'v_count', np.asarray( v_count ) )
+        #     print( 'batch_sizes', batch_sizes )
 
     # Note the batch size
     batch_sizes.push_back( pair[int,int]( initial_u_index - last_u_index, initial_v_index - last_v_index ) )
@@ -1335,17 +1278,17 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
     (&last_u_index)[0] = initial_u_index
     (&last_v_index)[0] = initial_v_index
 
-    with gil:
-        print( '\nAt the end of one loop:' )
-        print( 'u_output_order', np.asarray( u_output_order ) )
-        print( 'v_output_order', np.asarray( v_output_order ) )
-        print( 'u_index', u_index )
-        print( 'v_index', v_index )
-        print( 'last_u_index', last_u_index )
-        print( 'last_v_index', last_v_index )
-        print( 'u_count', np.asarray( u_count ) )
-        print( 'v_count', np.asarray( v_count ) )
-        print( 'batch_sizes', batch_sizes )
+    # with gil:
+    #     print( '\nAt the end of one loop:' )
+    #     print( 'u_output_order', np.asarray( u_output_order ) )
+    #     print( 'v_output_order', np.asarray( v_output_order ) )
+    #     print( 'u_index', u_index )
+    #     print( 'v_index', v_index )
+    #     print( 'last_u_index', last_u_index )
+    #     print( 'last_v_index', last_v_index )
+    #     print( 'u_count', np.asarray( u_count ) )
+    #     print( 'v_count', np.asarray( v_count ) )
+    #     print( 'batch_sizes', batch_sizes )
 
 # Can't include these in the pxd file for some reason
 # @cython.boundscheck( False )
@@ -1355,7 +1298,6 @@ cdef vector[pair[int, int]] fastMessagePassing( const int[:, :]           edge_p
                                                 const int[:, :]           node_meta,
                                                 const int[:, :]           edge_meta,
                                                 const int[:]              graph_meta,
-                                                const unordered_set[int]& skip,
                                                 int[:]                    u_output_order,
                                                 int[:, :]                 v_output_order,
                                                 int[:]                    u_count,
@@ -1371,7 +1313,6 @@ cdef vector[pair[int, int]] fastMessagePassing( const int[:, :]           edge_p
             node_meta            : Meta data about nodes
             edge_meta            : Meta data about the edges
             graph_meta           : Meta data about the graph
-            skip                 : Do not traverse nodes in here
             u_output_order       : The order nodes are visited for computing U
             v_output_order       : The order (edge,node) are visited in edge_parents for computing V
             u_count              : When to proceed on U calculation for node
@@ -1398,7 +1339,6 @@ cdef vector[pair[int, int]] fastMessagePassing( const int[:, :]           edge_p
                                     node_meta,
                                     edge_meta,
                                     graph_meta,
-                                    skip,
                                     edge_parents_buffer,
                                     edge_children_buffer,
                                     u_count,
@@ -1410,7 +1350,6 @@ cdef vector[pair[int, int]] fastMessagePassing( const int[:, :]           edge_p
                             node_meta,
                             edge_meta,
                             graph_meta,
-                            skip,
                             u_output_order,
                             v_output_order,
                             u_index,
@@ -1432,7 +1371,6 @@ cdef vector[pair[int, int]] fastMessagePassing( const int[:, :]           edge_p
                             node_meta,
                             edge_meta,
                             graph_meta,
-                            skip,
                             u_output_order,
                             v_output_order,
                             u_index,
@@ -1451,13 +1389,12 @@ cdef vector[pair[int, int]] fastMessagePassing( const int[:, :]           edge_p
             break
 
     # Check to see if the algroithm failed
-    if( u_index != u_output_order.shape[0] - skip.size() or
-        v_index != v_output_order.shape[0] - skip.size() ):
+    if( u_index != u_output_order.shape[0] or
+        v_index != v_output_order.shape[0] ):
         # Make this mean that we failed
         # batch_sizes.clear()
         with gil:
 
-            print( 'skip', skip )
             print( 'u_index', u_index )
             print( 'v_index', v_index )
             print( 'u_output_order.shape', u_output_order.shape )
@@ -1514,7 +1451,6 @@ cpdef polytreeMessagePassing( int[:, :] edge_parents,
                                       node_meta,
                                       edge_meta,
                                       graph_meta,
-                                      unordered_set[int](),
                                       u_output_order,
                                       v_output_order,
                                       u_count,

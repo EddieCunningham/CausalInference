@@ -16,7 +16,7 @@ NEXT_FAMILY  [-1 -1 -1  4 -1  6 -1 -1 -1]  The next index in this array where no
 
 #############################
 
-edge_children: Contains the children for each edge.  Has n_nodes elements
+edge_children: Contains the children for each edge.
 index  [0 1 2 3 4]
 
 EDGE   [0 1 2 3 3]  Edge index (parent edge of node)

@@ -12,7 +12,6 @@ cdef vector[pair[int, int]] fastMessagePassing( const int[:, :]           edge_p
                                                 const int[:, :]           node_meta,
                                                 const int[:, :]           edge_meta,
                                                 const int[:]              graph_meta,
-                                                const unordered_set[int]& skip,
                                                 int[:]                    u_output_order,
                                                 int[:, :]                 v_output_order,
                                                 int[:]                    u_count,
