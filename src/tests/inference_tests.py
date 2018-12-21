@@ -45,7 +45,6 @@ def polytreeTest():
 
     # graphs = [ polyTree2() ]
 
-
     sparses = [ graph.toSparse() for graph in graphs ]
     edge_parents, edge_children = Graph.combineSparse( sparses )
     if( False ):

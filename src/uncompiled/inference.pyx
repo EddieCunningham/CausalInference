@@ -11,8 +11,8 @@ from compiled.traversal cimport *
 from compiled.traversal import *
 from cython.operator cimport dereference as deref, preincrement as inc
 
-# @cython.boundscheck( False )
-# @cython.wraparound( False )
+@cython.boundscheck( False )
+@cython.wraparound( False )
 cpdef cutMessagePassing( int[:, :] edge_parents,
                          int[:, :] edge_children,
                          int[:, :] node_meta,
@@ -66,18 +66,9 @@ cpdef cutMessagePassing( int[:, :] edge_parents,
                 node_mapping[node] = j
                 j += 1
 
-        # with gil:
-        #     print( '\n' )
-        #     print( 'node_mapping', np.asarray( node_mapping ) )
-
         # Fill in the edge set
         for edge in range( edge_meta.shape[1] ):
             edge_set.insert( edge )
-
-        # with gil:
-        #     print( '\n' )
-        #     print( 'Initially, the edge set is:' )
-        #     print( 'edge_set', np.asarray( edge_set ) )
 
         # Fill cut_edge_parents
         j = 0
@@ -95,12 +86,6 @@ cpdef cutMessagePassing( int[:, :] edge_parents,
                 if( edge_set_it != edge_set.end() ):
                     edge_set.erase( edge_set_it )
 
-        # with gil:
-        #     print( '\n' )
-        #     print( 'After the edge parents:' )
-        #     print( 'cut_edge_parents', np.asarray( cut_edge_parents ) )
-        #     print( 'edge_set', np.asarray( edge_set ) )
-
         # Fill cut_edge_children
         k = 0
         for i in range( edge_children.shape[1] ):
@@ -117,12 +102,6 @@ cpdef cutMessagePassing( int[:, :] edge_parents,
                 if( edge_set_it != edge_set.end() ):
                     edge_set.erase( edge_set_it )
 
-        # with gil:
-        #     print( '\n' )
-        #     print( 'After the edge children:' )
-        #     print( 'cut_edge_children', np.asarray( cut_edge_children ) )
-        #     print( 'edge_set', np.asarray( edge_set ) )
-
         # Find the new indices for the edges
         current_edge = 0
         for edge in range( edge_meta.shape[1] ):
@@ -131,11 +110,6 @@ cpdef cutMessagePassing( int[:, :] edge_parents,
                 current_edge += 1
             else:
                 edge_mapping[edge] = -1
-
-        # with gil:
-        #     print( '\n' )
-        #     print( 'The edge mapping is:' )
-        #     print( 'edge_mapping', np.asarray( edge_mapping ) )
 
         # Re-index the edges to account for the completely missing edges
         for i in range( cut_edge_parents.shape[1] ):
@@ -146,13 +120,6 @@ cpdef cutMessagePassing( int[:, :] edge_parents,
         for i in range( cut_edge_children.shape[1] ):
             edge = cut_edge_children[EDGE, i]
             cut_edge_children[EDGE, i] = edge_mapping[ edge ]
-
-    # print( '\n' )
-    # print( 'Before trimming:' )
-    # print( 'cut_edge_parents', np.asarray( cut_edge_parents ) )
-    # print( 'cut_edge_children', np.asarray( cut_edge_children ) )
-    # print( '\n' )
-    # print( '\n' )
 
     # Trim the views
     cut_edge_parents  = cut_edge_parents[:, :j]
@@ -176,44 +143,19 @@ cpdef cutMessagePassing( int[:, :] edge_parents,
             if( mapped_index != -1 ):
                 reverse_node_mapping[ mapped_index ] = i
 
-    # print( '\n' )
-    # print( 'reverse_edge_mapping', np.asarray( reverse_edge_mapping ) )
-    # print( 'reverse_node_mapping', np.asarray( reverse_node_mapping ) )
-
-    # print( '\n' )
-    # print( 'END OF CYTHON' )
-    # print( '\n' )
-
     return processed_results, reverse_edge_mapping, reverse_node_mapping
 
 @cython.boundscheck( False )
 @cython.wraparound( False )
-cpdef inferenceInstructions( int[:, :] edge_parents,
-                             int[:, :] edge_children,
-                             int[:, :] node_meta,
-                             int[:, :] edge_meta,
-                             int[:]    graph_meta,
-                             int[:]    brute_force ):
+cpdef cutsetMessagePassing( int[:, :] edge_parents,
+                            int[:, :] edge_children,
+                            int[:, :] node_meta,
+                            int[:, :] edge_meta,
+                            int[:]    graph_meta,
+                            int[:]    brute_force ):
     """
-    This file will return the instructions needed to perform inference
-    over Bayesian networks.  It will return the list of computations needed
-    to actually perform inference.
-
-    The algorithm is for polytrees, however if you brute force over
-    a feedback vertex set, it will work on multiply-connected
-    graphs.
-
-    If a directed cycle is count and the brute_force set is insufficient, the
-    algorithm will default to loopy propagation belief (not implemented yet)
-
-    In order to use the juntion tree algorithm, the user must hand this
-    file the graph decomposition.
-
-    At each computation, at each step the user needs to know the following:
-        - Which nodes to integrate
-        - Which nodes to evaluate a potential over
-        - The type of message being computed
-        - Which messages are needed
+    Return the message passing order for graph that does not traverse nodes
+    in brute force
 
     Args:
         edge_parents  : Info about edges' parent nodes
@@ -224,18 +166,11 @@ cpdef inferenceInstructions( int[:, :] edge_parents,
         brute_force   : Will not integrate these out
 
     Returns:
-        u_output_order
-            - target node
-            - potential over which nodes
-            - who to integrate
-            - u for which nodes
-            - v for which nodes
-        v_output_order
-            - target node and edge
-            - potential over which nodes
-            - who to integrate
-            - u for which nodes
-            - v for which nodes
+        u_output_order : The order nodes are visited for computing U
+        v_output_order : The order (edge,node) are visited in edge_parents for computing V
+        batch_sizes    : The number of elements per batch.  Elements within a batch
+                         can be processed in parallel.  First element is the elements
+                         to take from U and second is the elements to take from V
     """
     cdef int[:]                 u_count
     cdef int[:]                 v_count
@@ -259,14 +194,6 @@ cpdef inferenceInstructions( int[:, :] edge_parents,
                                       brute_force )
 
     ( cut_edge_parents, cut_edge_children, cut_node_meta, cut_edge_meta, cut_graph_meta ), reverse_edge_mapping, reverse_node_mapping = cut_results
-
-    # print( '\n' )
-    # print( 'Processed' )
-    # print( 'cut_edge_parents\n', cut_edge_parents )
-    # print( 'cut_edge_children\n', cut_edge_children )
-    # print( 'cut_node_meta\n', cut_node_meta )
-    # print( 'cut_edge_meta\n', cut_edge_meta )
-    # print( 'cut_graph_meta\n', cut_graph_meta )
 
     edge_parents_buffer  = np.empty( cut_graph_meta[MAX_PARENTS], dtype=np.int32 )
     edge_children_buffer = np.empty( cut_graph_meta[MAX_CHILDREN], dtype=np.int32 )
@@ -294,14 +221,6 @@ cpdef inferenceInstructions( int[:, :] edge_parents,
                                       edge_children_buffer,
                                       child_edges_buffer )
 
-    # print( '\n' )
-    # print( 'In the cut index' )
-    # print( 'u_output_order', np.asarray( u_output_order ) )
-    # print( 'v_output_order', np.asarray( v_output_order ) )
-    # print( '\n' )
-    # print( 'reverse_edge_mapping', np.asarray( reverse_edge_mapping ) )
-    # print( 'reverse_node_mapping', np.asarray( reverse_node_mapping ) )
-
     with nogil:
         # Retrieve the original indices
         for i in range( u_output_order.shape[0] ):
@@ -311,14 +230,107 @@ cpdef inferenceInstructions( int[:, :] edge_parents,
             v_output_order[i, EDGE] = reverse_edge_mapping[v_output_order[i, EDGE]]
             v_output_order[i, NODE] = reverse_node_mapping[v_output_order[i, NODE]]
 
-    # print( '\n' )
-    # print( 'In the new index' )
-    # print( 'u_output_order', np.asarray( u_output_order ) )
-    # print( 'v_output_order', np.asarray( v_output_order ) )
-
-    # print( '\n' )
-    # print( '===================' )
-    # print( '===================' )
-    # print( '\n' )
-
     return np.asarray( u_output_order ), np.asarray( v_output_order ), batch_sizes
+
+@cython.boundscheck( False )
+@cython.wraparound( False )
+cpdef batchedInferenceInstructions( int[:, :]             edge_parents,
+                                    int[:, :]             edge_children,
+                                    int[:, :]             node_meta,
+                                    int[:, :]             edge_meta,
+                                    int[:]                graph_meta,
+                                    int[:]                brute_force,
+                                    int[:]                u_order,
+                                    int[:, :]             v_order,
+                                    vector[pair[int,int]] batch_sizes ):
+    """
+    Will compress the output order and determine which computations can
+    be combined into a batch.
+
+    Will group by computation type and number of nodes in potential
+
+    Args:
+        edge_parents   : Info about edges' parent nodes
+        edge_children  : Info about edges' child nodes
+        node_meta      : Meta data about nodes
+        edge_meta      : Meta data about the edges
+        graph_meta     : Meta data about the graph
+        brute_force    : Will not integrate these out
+        u_output_order : The order nodes are visited for computing U
+        v_output_order : The order (edge,node) are visited in edge_parents for computing V
+        batch_sizes    : The number of elements per batch.  Elements within a batch
+                         can be processed in parallel.  First element is the elements
+                         to take from U and second is the elements to take from V
+
+    Returns:
+        vector[vector[WorkTicket]] that what computations to do
+    """
+    cdef int i
+    cdef int u_index = 0
+    cdef int v_index = 0
+    cdef vector[pair[int,int]] new_batch_sizes
+
+    with nogil:
+
+        for i in range( batch_sizes.size() ):
+
+            # Compute U
+            for j in range( u_index, u_index + batch_sizes.at( i ).first ):
+
+                # U for every non-fbs parent
+
+                # V for every non-fbs parent at every child edge thats not this node's parent edge
+
+                # Transition to this node
+
+                # Transition to every sibling
+
+                # V for every sibling at every child edge
+
+                # Integrate over every parent and sibling that isn't in the fbs
+
+            # Compute V
+            for j in range( v_index, v_index + batch_sizes.at( i ).second ):
+
+                # U for every non-fbs mate
+
+                # V for every non-fbs mate at every child edge thats not e
+
+                # Transition to every child
+
+                # V for every child at every child edge
+
+                # Integrate over every mate and child that isn't in the fbs
+
+            u_index += batch_sizes.at( i ).first
+            v_index += batch_sizes.at( i ).second
+
+            # Make sure that we don't integrate out cutset nodes
+
+@cython.boundscheck( False )
+@cython.wraparound( False )
+cpdef getGraphWorkTickets( graphs ):
+    sparses = [ graph.toSparse() for graph in graphs ]
+    edge_parents, edge_children = Graph.combineSparse( sparses )
+    big_sparse = preprocessSparseGraphForTraversal( edge_parents.astype( np.int32 ), edge_children.astype( np.int32 ) )
+    edge_parents, edge_children, node_meta, edge_meta, graph_meta = big_sparse
+    cutset = Graph.combineCutSets( graphs )
+
+    u_order, v_order, batch_sizes = cutsetMessagePassing( edge_parents,
+                                                          edge_children,
+                                                          node_meta,
+                                                          edge_meta,
+                                                          graph_meta,
+                                                          cutset )
+
+    work_tickets = batchedInferenceInstructions( edge_parents,
+                                                 edge_children,
+                                                 node_meta,
+                                                 edge_meta,
+                                                 graph_meta,
+                                                 cutset,
+                                                 u_order,
+                                                 v_order,
+                                                 batch_sizes )
+
+    return work_tickets

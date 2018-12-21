@@ -4,20 +4,23 @@ from libcpp cimport bool
 
 cdef struct WorkTicket:
 
-    # The node this ticket is for
-    int node
+    # The nodes this ticket is for
+    vector[int] nodes
+
+    # Need to know the computation type to ensure compatibility
+    int computation_type
 
     # The nodes to evaluate the potential over
-    vector[int] potential
+    vector[vector[int]] potentials
 
-    # Incoming u nodes
-    vector[pair[int,vector[int]]]            u_nodes
+    # Incoming u nodes for every node
+    vector[vector[pair[int,vector[int]]]]            u_nodes
 
     # Incoming v nodes
-    vector[pair[int,vector[pair[int, int]]]] v_nodes
+    vector[vector[pair[int,vector[pair[int, int]]]]] v_nodes
 
     # Which nodes to integrate out at this step
-    vector[int] nodes_to_integrate
+    vector[vector[int]] nodes_to_integrate
 
-    # If this is for loopy propogation belief
+    # If we are looping
     bool loopy

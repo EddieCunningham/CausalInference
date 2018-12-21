@@ -1133,17 +1133,6 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
 
     cdef int initial_u_index =  u_index
     cdef int initial_v_index =  v_index
-    # with gil:
-    #     print( '\nNew Step:' )
-    #     print( 'u_output_order', np.asarray( u_output_order ) )
-    #     print( 'v_output_order', np.asarray( v_output_order ) )
-    #     print( 'u_index', u_index )
-    #     print( 'v_index', v_index )
-    #     print( 'last_u_index', last_u_index )
-    #     print( 'last_v_index', last_v_index )
-    #     print( 'u_count', np.asarray( u_count ) )
-    #     print( 'v_count', np.asarray( v_count ) )
-    #     print( 'batch_sizes', batch_sizes )
 
     # For every completed U computation:
     #  - Decrement u_count for all children
@@ -1185,18 +1174,6 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
                                  edge_children_buffer,
                                  edge,
                                  node )
-        # with gil:
-        #     print( '\nAfter U:' )
-        #     print( 'node', node )
-        #     print( 'u_output_order', np.asarray( u_output_order ) )
-        #     print( 'v_output_order', np.asarray( v_output_order ) )
-        #     print( 'u_index', u_index )
-        #     print( 'v_index', v_index )
-        #     print( 'last_u_index', last_u_index )
-        #     print( 'last_v_index', last_v_index )
-        #     print( 'u_count', np.asarray( u_count ) )
-        #     print( 'v_count', np.asarray( v_count ) )
-        #     print( 'batch_sizes', batch_sizes )
 
     # For every completed V computation:
     #  - Decrement u_count for children that come from a different edge
@@ -1257,19 +1234,6 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
                           edge_parents_buffer,
                           edge_children_buffer,
                           node )
-        # with gil:
-        #     print( '\nAfter V:' )
-        #     print( 'node', node )
-        #     print( 'edge', edge )
-        #     print( 'u_output_order', np.asarray( u_output_order ) )
-        #     print( 'v_output_order', np.asarray( v_output_order ) )
-        #     print( 'u_index', u_index )
-        #     print( 'v_index', v_index )
-        #     print( 'last_u_index', last_u_index )
-        #     print( 'last_v_index', last_v_index )
-        #     print( 'u_count', np.asarray( u_count ) )
-        #     print( 'v_count', np.asarray( v_count ) )
-        #     print( 'batch_sizes', batch_sizes )
 
     # Note the batch size
     batch_sizes.push_back( pair[int,int]( initial_u_index - last_u_index, initial_v_index - last_v_index ) )
@@ -1278,21 +1242,9 @@ cdef void messagePassingStep( const int[:, :]           edge_parents,
     (&last_u_index)[0] = initial_u_index
     (&last_v_index)[0] = initial_v_index
 
-    # with gil:
-    #     print( '\nAt the end of one loop:' )
-    #     print( 'u_output_order', np.asarray( u_output_order ) )
-    #     print( 'v_output_order', np.asarray( v_output_order ) )
-    #     print( 'u_index', u_index )
-    #     print( 'v_index', v_index )
-    #     print( 'last_u_index', last_u_index )
-    #     print( 'last_v_index', last_v_index )
-    #     print( 'u_count', np.asarray( u_count ) )
-    #     print( 'v_count', np.asarray( v_count ) )
-    #     print( 'batch_sizes', batch_sizes )
-
 # Can't include these in the pxd file for some reason
-# @cython.boundscheck( False )
-# @cython.wraparound( False )
+@cython.boundscheck( False )
+@cython.wraparound( False )
 cdef vector[pair[int, int]] fastMessagePassing( const int[:, :]           edge_parents,
                                                 const int[:, :]           edge_children,
                                                 const int[:, :]           node_meta,
@@ -1392,16 +1344,7 @@ cdef vector[pair[int, int]] fastMessagePassing( const int[:, :]           edge_p
     if( u_index != u_output_order.shape[0] or
         v_index != v_output_order.shape[0] ):
         # Make this mean that we failed
-        # batch_sizes.clear()
-        with gil:
-
-            print( 'u_index', u_index )
-            print( 'v_index', v_index )
-            print( 'u_output_order.shape', u_output_order.shape )
-            print( 'v_output_order.shape', v_output_order.shape )
-            print( 'Final u_count', np.asarray( u_count ) )
-            print( 'Final v_count', np.asarray( v_count ) )
-
+        batch_sizes.clear()
 
     return batch_sizes
 

@@ -69,3 +69,39 @@ cdef extern from 'definitions.h' namespace 'cython_accessors':
     cdef int MAX_CHILD_EDGES # MAX_CHILD_EDGES
     cdef int MAX_PARENTS     # MAX_PARENTS
     cdef int MAX_CHILDREN    # MAX_CHILDREN
+
+"""
+PROPOSED NEW LAYOUT:
+
+hypergraph: Contains the unordered hypergraph.  Edge is sorted and node is the list of nodes at each edge
+index        [ 0  1  2  3  4  5  6  7  8]
+
+EDGE         [ 0  0  1  1  2  2  3  3  3]  Edge index
+NODE         [ 7  8  0  1  1  2  2  3  4]  Node index
+NEXT_FAMILY  [-1 -1 -1  4 -1  6 -1 -1 -1]  The next index in this array where node appears.  -1 if last edge for node
+
+#############################
+
+node_meta: Location of node in edge_children and edge_parents
+index (node)         [ 0  1  2  3  4  5  6  7  8]
+
+NODE_INDEX           [ 0 -1 -1  1  2  3  3 -1 -1]  Index of first edge node is a part of in hypergraph
+N_CHILD_EDGES        [ 1  2  2  1  1  0  0  1  1]  Number of edges is member of
+ORDER                [ ........................ ]  Node ordering
+
+#############################
+
+edge_meta: Location of edge in edge_parents.  If edge is missing, put -1 for EDGE_INDEX
+index (edge)         [0 1 2 3]
+
+EDGE_INDEX           [0 2 4 6]  Index of edge in hypergraph
+N_NODES              [1 1 1 2]  Number of nodes
+BASE_CASE            [ ..... ]  If the potential for this edge can be evaluated firsrt
+
+#############################
+
+graph_meta: Meta data about the number of roots and leaves and how many edges a node can be a part of
+            and how many nodes can be in an edge
+[ N_ROOTS, N_LEAVES, MAX_EDGE_MEMBERSHIP, MAX_NODES_IN_EDGE ]
+[4 2 2 3 3]
+"""
