@@ -1,7 +1,7 @@
 import numpy as np
 import itertools
 from .draw import _DrawingMixin
-from .algorithm import _AlgorithmMixin
+from .clique_tree import _AlgorithmMixin
 from collections import deque
 
 __all__ = [ 'Graph' ]

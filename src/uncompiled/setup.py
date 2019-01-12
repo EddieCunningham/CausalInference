@@ -11,9 +11,7 @@ def defaultExtension( name ):
                       extra_link_args=[ '-fopenmp' ],
                       language='c++' )
 
-
-setup( ext_modules=cythonize( [ defaultExtension( 'traversal' ),
-                                defaultExtension( 'inference' ) ] ) )
+setup( ext_modules=cythonize( [ defaultExtension( 'message_passing' ) ] ) )
 
 # THIS IS INTENDED TO BE BUILD INSIDE A DOCKER CONTAINER!!!
 # Just run "./run.sh" and then within the terminal "python -m host.main"
