@@ -3,8 +3,11 @@ import numpy as np
 from .markov_network import MarkovNetwork
 from host.src.clique import Clique
 import itertools
+from collections import namedtuple
 
 class JunctionTree( MarkovNetwork ):
+
+    MessageInstruction = namedtuple( 'MessageInstruction', [ 'message', 'incoming_messages', 'integrate_out' ] )
 
     @property
     def super_nodes( self ):
@@ -16,30 +19,14 @@ class JunctionTree( MarkovNetwork ):
 
     @staticmethod
     def example_junction_tree():
-        A = MarkovNetwork()
-        A.add_edges_from( Clique.edges_for( [ 1, 2, 3 ] ) )
-
-        B = MarkovNetwork()
-        B.add_edges_from( Clique.edges_for( [ 2, 3 ] ) )
-
-        C = MarkovNetwork()
-        C.add_edges_from( Clique.edges_for( [ 2, 3, 6 ] ) )
-
-        D = MarkovNetwork()
-        D.add_edges_from( Clique.edges_for( [ 6, 7 ] ) )
-
-        E = MarkovNetwork()
-        E.add_edges_from( Clique.edges_for( [ 3, 6, 7 ] ) )
-
-        F = MarkovNetwork()
-        F.add_edges_from( Clique.edges_for( [ 6, 7, 8 ] ) )
-
-        G = MarkovNetwork()
-        G.add_edges_from( Clique.edges_for( [ 3, 4, 5 ] ) )
-
-        H = MarkovNetwork()
-        H.add_edges_from( Clique.edges_for( [ 4, 5, 9 ] ) )
-
+        A = Clique( [ 1, 2, 3 ] )
+        B = Clique( [ 2, 3 ] )
+        C = Clique( [ 2, 3, 6 ] )
+        D = Clique( [ 6, 7 ] )
+        E = Clique( [ 3, 6, 7 ] )
+        F = Clique( [ 6, 7, 8 ] )
+        G = Clique( [ 3, 4, 5 ] )
+        H = Clique( [ 4, 5, 9 ] )
         jt = JunctionTree()
         jt.add_edge( A, B )
         jt.add_edge( B, C )
@@ -62,30 +49,14 @@ class JunctionTree( MarkovNetwork ):
 
     @staticmethod
     def example_non_junction_tree():
-        A = MarkovNetwork()
-        A.add_edges_from( Clique.edges_for( [ 1, 2, 3 ] ) )
-
-        B = MarkovNetwork()
-        B.add_edges_from( Clique.edges_for( [ 2, 3 ] ) )
-
-        C = MarkovNetwork()
-        C.add_edges_from( Clique.edges_for( [ 2, 3, 6 ] ) )
-
-        D = MarkovNetwork()
-        D.add_edges_from( Clique.edges_for( [ 6, 7 ] ) )
-
-        E = MarkovNetwork()
-        E.add_edges_from( Clique.edges_for( [ 3, 6, 7 ] ) )
-
-        F = MarkovNetwork()
-        F.add_edges_from( Clique.edges_for( [ 6, 7, 8 ] ) )
-
-        G = MarkovNetwork()
-        G.add_edges_from( Clique.edges_for( [ 3, 4, 6 ] ) )
-
-        H = MarkovNetwork()
-        H.add_edges_from( Clique.edges_for( [ 4, 5, 9 ] ) )
-
+        A = Clique( [ 1, 2, 3 ] )
+        B = Clique( [ 2, 3 ] )
+        C = Clique( [ 2, 3, 6 ] )
+        D = Clique( [ 6, 7 ] )
+        E = Clique( [ 3, 6, 7 ] )
+        F = Clique( [ 6, 7, 8 ] )
+        G = Clique( [ 3, 4, 6 ] )
+        H = Clique( [ 4, 5, 9 ] )
         jt = JunctionTree()
         jt.add_edge( A, B )
         jt.add_edge( B, C )
@@ -134,36 +105,28 @@ class JunctionTree( MarkovNetwork ):
 
         return as_graph.draw( output_folder=output_folder, output_name=output_name, file_format=file_format, labels=labels )
 
-    def to_cluster_graph( self ):
-        """ Convert the nodes in this tree to sets
-
-        Args:
-            None
-
-        Returns:
-            cluster_tree - A cluster_tree that must be composed of unordered clusters of nodes
-        """
-        graph = MarkovNetwork()
-        for cluster1, cluster2 in self.edges:
-            graph.add_edge( set( cluster1.nodes ), set( cluster2.nodes ) )
-        return graph
-
-    @classmethod
-    def satisfies_running_intersection_property( cls, cluster_tree ):
+    def has_running_intersection_property( self ):
         """ Check the running intersection property.
 
         Args:
-            cluster_tree - A cluster_tree that must be composed of super_nodes of nodes
+            None
 
         Returns:
             Whether or not this cluser graph satisfies the rip
         """
 
         # Start from every leaf and go inwards.
-        message_passing_order = cluster_tree.message_passing_order( no_batches=True )
+        message_passing_order = self.message_passing_order( no_batches=True )
 
         union_at_nodes = {}
+        visited_pairs = set()
         for super_node, adjacent_super_node in message_passing_order:
+
+            # Don't want to repeat - only want to start at leaves and go inward.
+            pair = tuple( sorted( [ super_node, adjacent_super_node ], key=lambda x: hash( x ) ) )
+            if( pair in visited_pairs ):
+                continue
+            visited_pairs.add( pair )
 
             # Build up the union tree so that we can check the running intersection property
             if( super_node not in union_at_nodes ):
@@ -206,36 +169,101 @@ class JunctionTree( MarkovNetwork ):
             print( 'Not a JunctionTree' )
             return False
 
-        # Every node must be a cluster
+        # Every node must be a clique object
         for cluster in tree.nodes:
-            if( isinstance( cluster, MarkovNetwork ) == False ):
-                print( 'Doesn\'t have a MarkovNetwork node' )
+            if( isinstance( cluster, Clique ) == False ):
+                print( 'Doesn\'t have a Clique node' )
                 return False
 
         # Must be an edge cover (for any edge in original_graph, both nodes must live in a node in tree)
-        cluster_graph = tree.to_cluster_graph()
-        for node1, node2 in tree.edges:
-            find_this = set( [ node1, node2 ] )
+        for node1, node2 in original_graph.edges:
+            find_this = Clique( [ node1, node2 ] )
 
-            for cluster in cluster_graph.nodes:
-                if( find_this.issubset( cluster ) == False ):
-                    print( 'Not an edge cover' )
-                    return False
+            found = False
+            for cluster in tree.nodes:
+                if( find_this.is_subset( cluster ) == True ):
+                    found = True
+            if( found == False ):
+                print( 'Not an edge cover' )
+                return False
 
         # Must satisfy the running intersection property
-        if( JunctionTree.satisfies_running_intersection_property( tree ) == False ):
+        if( tree.has_running_intersection_property() == False ):
             print( 'Doesn\'t satisfy the rip' )
             return False
 
         return True
 
-    def inference( self ):
-        junction_tree = self.junction_tree()
+    def is_consistent( self ):
+        """ Check to see if inference worked.  This is done by seeing if
+            pairs of nodes at each edge marginalize to the same thing.
+            Because of the RIP, locally consistency implies global consistency
 
-        message_passing_order = junction_tree.message_passing_order()
+        Args:
+            None
 
+        Returns:
+            Whether or not tree is consistent
+        """
+        pass
+
+    def shafer_shenoy_inference_instructions( self ):
+        """ Build the set of instructions of how to do inference.  This is useful so
+            that we can save off the instructions for any particular graph.
+            This function will return the instructions needed to do shafer shenoy
+            message passing.  Here we have messages for the separator potentials.
+
+        Args:
+            None
+
+        Returns:
+            instructions - The instructions on how to perform inference
+        """
+        message_instructions = []
+
+        message_passing_order = self.message_passing_order()
+
+        # Loop over every message batch
         for potential_batch in message_passing_order:
 
-            print()
+            # Populate the batches with the messages that we should combine
+            batch = []
             for potential_in, potential_out in potential_batch:
-                print( potential_in.nodes, potential_out.nodes )
+
+                difference = potential_in.difference( potential_out )
+                nodes_in  = tuple( potential_in.nodes )
+                nodes_out = tuple( potential_out.nodes )
+
+                # Each edge represents a message
+                message           = MarkovNetwork.Message( nodes_in, nodes_out )
+                integrate_out     = tuple( difference )
+                incoming_messages = [ MarkovNetwork.Message( tuple( neighbor.nodes ), nodes_in ) for neighbor in self.neighbors( nodes_in ) if neighbor != nodes_out ]
+
+                batch.append( JunctionTree.MessageInstruction( message, incoming_messages, integrate_out ) )
+
+            message_instructions.append( batch )
+
+        # At the end we want to compute the smoothed clique potentials.  This can be done asynchronously
+        batch = []
+        for clique in self.nodes:
+
+            nodes             = tuple( clique.nodes )
+            message           = MarkovNetwork.Message( nodes, nodes )
+            incoming_messages = [ MarkovNetwork.Message( tuple( neighbor.nodes ), nodes ) for neighbor in self.neighbors( nodes ) ]
+            integrate_out     = tuple( [] )
+
+            batch.append( JunctionTree.MessageInstruction( message, incoming_messages, integrate_out ) )
+        message_instructions.append( batch )
+
+        return message_instructions
+
+    def recombination_instructions( self ):
+        """ How to combine messages to
+
+        Args:
+            None
+
+        Returns:
+            instructions - The instructions on how to perform inference
+        """
+        pass

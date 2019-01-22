@@ -49,7 +49,7 @@ cdef void polyforest_message_passing( int[:]       polyforest,
         Args:
             polyforest    : This contains the adjacency matrix for the hypergraph.
 
-        Returns (Fills reference):
+        Returns:
             messages      : The correct order that the edges are to be processed
             batch_sizes   : The number of elements per batch.  Elements within a batch
                             can be processed in parallel.
@@ -231,7 +231,7 @@ def message_passing( polyforest,
             loopy         : Whether or not to run loopy propagation belief
             loopy_iters   : When to stop loopy propagation belief
 
-        Returns (Fills reference):
+        Returns:
             messages      : The correct order that the edges are to be processed
             batch_sizes   : The number of elements per batch.  Elements within a batch
                             can be processed in parallel.
@@ -259,7 +259,7 @@ cpdef message_passing_cython( int[:] polyforest,
             loopy         : Whether or not to run loopy propagation belief
             loopy_iters   : When to stop loopy propagation belief
 
-        Returns (Fills reference):
+        Returns:
             messages      : The correct order that the edges are to be processed
             batch_sizes   : The number of elements per batch.  Elements within a batch
                             can be processed in parallel.

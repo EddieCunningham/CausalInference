@@ -3,20 +3,27 @@ from networkx.algorithms import approximation
 import itertools
 import numpy as np
 
+__all__ = [ 'Clique', 'DiscreteClique' ]
+
 class Clique():
 
-    def __init__( self, nodes ):
-        """ Nodes must be hashable
+    def __init__( self, nodes, computation_type=None ):
+        """ Nodes must be hashable and the hash must stay the same for the
+            lifetime of this object!!!!!!
 
         Args:
-            nodes - An iterable of hashed nodes
+            nodes            - An iterable of hashed nodes
+            computation_type - What kind of computation goes into evaluating
+                               the potential.  Useful for determining batches
 
         Returns:
             None
         """
-        self.nodes = sorted( nodes, key=lambda x: hash( x ) )
+        self.nodes  = sorted( nodes, key=lambda x: hash( x ) )
         self.hashes = np.array( [ hash( node ) for node in self.nodes ] )
-        self.hash = hash( tuple( self.hashes ) )
+        self.hash   = hash( tuple( self.hashes ) )
+        self.computation_type = computation_type
+        self.potential = None
 
     def __hash__( self ):
         """ A simple way to hash nodes.
@@ -34,6 +41,11 @@ class Clique():
 
     def __repr__( self ):
         return str( self )
+
+    def __eq__( self, other ):
+        if( isinstance( other, Clique ) ):
+            return other.hash == self.hash
+        return self.hash == Clique( other ).hash
 
     def is_subset( self, other_clique ):
         """ Check if this clique is a subset of the other clique
@@ -59,7 +71,20 @@ class Clique():
         """
         assert isinstance( other_clique, Clique )
         intersection_indices = np.in1d( self.hashes, other_clique.hashes )
-        return [ self.nodes[i] for i in intersection_indices ]
+        return [ self.nodes[i] for i, val in enumerate( intersection_indices ) if val == True ]
+
+    def difference( self, other_clique ):
+        """ The nodes in this clique that are not in other_clique
+
+        Args:
+            other_clique - The potential sepset of this clique
+
+        Returns:
+            The nodes in this clique that are not in other_clique
+        """
+        assert isinstance( other_clique, Clique )
+        difference_indices = ~np.in1d( self.hashes, other_clique.hashes )
+        return [ self.nodes[i] for i, val in enumerate( difference_indices ) if val == True ]
 
     @staticmethod
     def edges_for( nodes ):
@@ -94,16 +119,16 @@ class Clique():
         complete_graph.add_edges_from( self.edges )
         return complete_graph
 
-    def potential( self ):
-        """ Return some potential over this clique
+    def set_potential( self, potential ):
+        """ Set the potential function over the nodes in this clique
 
         Args:
-            None
+            potential - Some potential over all the nodes
 
         Returns:
             potential over clique
         """
-        assert 0, 'Implement this in a subclass if you want to do inference'
+        self.potential = potential
 
     def potential_complexity( self ):
         """ Evaluates how expensive it is to compute the potential for max_clique
@@ -115,3 +140,45 @@ class Clique():
             None
         """
         assert 0, 'Implement this in a subclass if you want to do inference'
+
+##############################################################################################################
+
+class DiscreteClique( Clique ):
+
+    def __init__( self, nodes, state_sizes ):
+        """ A clique in a discrete network.  Pass in the state sizes
+
+        Args:
+            nodes            - An iterable of hashed nodes
+            state_sizes      - The number of values that each node can take
+
+        Returns:
+            None
+        """
+        super().__init__( nodes )
+        self.state_sizes = np.array( [ state_sizes[self.nodes.index( node )] for node in nodes ] )
+        self.computation_type = tuple( self.state_sizes )
+
+    def set_potential( self, potential ):
+        """ Set the potential function over the nodes in this clique
+
+        Args:
+            potential - Some potential over all the nodes.  Must be a numpy array
+
+        Returns:
+            None
+        """
+        assert isinstance( potential, np.ndarray )
+        self.potential = potential
+
+    def potential_complexity( self ):
+        """ Evaluates how expensive it is to compute the potential for max_clique.
+            This is going to be the number of elements in the potential for this clique
+
+        Args:
+            None
+
+        Returns:
+            None
+        """
+        return np.prod( np.array( self.potential.shape ) )

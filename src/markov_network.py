@@ -5,8 +5,14 @@ import numpy as np
 from compiled.message_passing import *
 from host.src.clique import Clique
 from heapq import nsmallest
+from collections import namedtuple
+from sortedcontainers import SortedDict
+from .red_black_tree import RedBlackTree, NodeData
 
 class MarkovNetwork( nx.Graph ):
+
+    Message = namedtuple( 'Message', [ 'incoming', 'outgoing' ] )
+    MaximalCliqueInstructions = namedtuple( 'MaximalCliqueInstructions', [ 'integrate_out', 'elimination_nodes', 'factors_to_combine' ] )
 
     def message_passing_order( self, root_nodes=None, loopy=False, loopy_iters=10, no_batches=False ):
         """ Returns an iterator on how to execute message passing.
@@ -153,7 +159,7 @@ class MarkovNetwork( nx.Graph ):
 
         Returns:
             sparse - The sparse hypergraph representation
-                                of the network
+                     of the network
         """
         return np.array( self.edges ).ravel()
 
@@ -163,7 +169,7 @@ class MarkovNetwork( nx.Graph ):
 
         Args:
             sparse - The sparse hypergraph representation
-                                of the network
+                     of the network
 
         Returns:
             graph - The MarkovNetwork represented by the hypergraph
@@ -188,7 +194,7 @@ class MarkovNetwork( nx.Graph ):
 
         Args:
             node_ordering - If None, will be however the nodes
-            are ordered under the hood
+                            are ordered under the hood
 
         Returns:
             render - The graphviz render
@@ -224,205 +230,166 @@ class MarkovNetwork( nx.Graph ):
 
         plt.savefig( '%s/%s.%s'%( output_folder, output_name, file_format ) )
 
-    # def get_cutset( self ):
-    #     """ Find a cutset of this network.  This is a set of nodes
-    #         that, when removed, leave the network without any cycles.
-    #         Using bad algorithm for the moment.
+    def build_clique( self, nodes ):
+        """ Build a clique over nodes.  Subclasses of MarkovNetwork should overload this
+        Args:
+            nodes - A list of nodes to build a clique over
+        Returns:
+            clique - The clique object
+        """
+        return Clique( nodes )
 
-    #     Args:
-    #         None
-
-    #     Returns:
-    #         cutset - A cutset for this node
-    #     """
-    #     assert 0
-
-    #     reduced = self.copy()
-
-    #     # Remove a minimum spanning tree from the graph until there are no cycles.
-    #     # This is so that we are left with nodes that comprise cycles
-    #     # TODO: DO NOT DELETE CONNECTED COMPONENTS WITH NO CYCLES
-    #     cycles = nx.cycle_basis( reduced )
-    #     while( len( cycles ) > 0 ):
-
-    #         mst = MarkovNetwork( nx.minimum_spanning_tree( reduced ) )
-    #         reduced.remove_edges_from( mst.edges )
-    #         cycles = nx.cycle_basis( reduced )
-
-    #     # This function will find the vertex cover of each connected component
-    #     def cover_connected_components( reduced_graph ):
-    #         vertex_cover = list( approximation.min_weighted_dominating_set( reduced ) )
-
-    #         node_with_most_neighbors = -1
-    #         most_neighbors = 0
-    #         for node in vertex_cover:
-    #             neighbors = list( reduced.neighbors( node ) )
-    #             if( len( neighbors ) > 0 and len( neighbors ) > most_neighbors ):
-    #                 node_with_most_neighbors = node
-    #                 most_neighbors = len( neighbors )
-
-    #         return node_with_most_neighbors
-
-    #     # The cutset will be the vertex cover nodes of each connected component
-    #     # in the resulting graph
-    #     cutset = []
-    #     node_with_most_neighbors = cover_connected_components( reduced )
-    #     while( node_with_most_neighbors != -1 ):
-    #         cutset.append( node_with_most_neighbors )
-    #         reduced.remove_nodes_from( [ node_with_most_neighbors ] )
-    #         node_with_most_neighbors = cover_connected_components( reduced )
-
-    #     return cutset
-
-    # def cutset_clustering( self, cutset ):
-    #     """ Triangulate the graph using a cutset.  Not really that great
-
-    #     Args:
-    #         cutset - The cutset nodes
-
-    #     Returns:
-    #         cluster_graph - Cluster graph generated using cutset.
-    #     """
-
-    #     assert 0
-
-    #     print( 'Cutset:', cutset )
-
-    #     # Find the loopy message passing order
-    #     message_batches = self.message_passing_order( loopy=True, loopy_iters=1 )
-
-    #     # Initialize the dependence sets
-    #     for node, data in self.nodes.data():
-    #         data['cutset_dependence'] = {}
-    #         for neighbor in self.neighbors( node ):
-    #             data['cutset_dependence'][neighbor] = set()
-
-    #     # Go through the messages and keep track of which cutset nodes are visited
-    #     for messages in message_batches:
-
-    #         print()
-
-    #         for in_node, out_node in messages:
-
-    #             print( in_node, out_node )
-
-    #             # in_node is a summary of the rest of the graph
-    #             # out_node now summarizes that part of the graph and in_node
-
-    #             if( in_node in cutset ):
-    #                 # The out_node clearly depends on in_node
-    #                 self.nodes[out_node]['cutset_dependence'][in_node].add( in_node )
-    #             elif( out_node in cutset ):
-    #                 continue
-    #             else:
-    #                 # Otherwise, update the out_node
-    #                 in_dep  = self.nodes[in_node]['cutset_dependence']
-    #                 out_dep = self.nodes[out_node]['cutset_dependence']
-
-    #                 union = set()
-    #                 for i, ( neighbor, accumulated ) in enumerate( in_dep.items() ):
-    #                     if( neighbor == out_node ):
-    #                         continue
-    #                     union = union.union( accumulated )
-
-    #                 intersection = set()
-    #                 for i, ( neighbor, accumulated ) in enumerate( in_dep.items() ):
-    #                     if( neighbor == out_node ):
-    #                         continue
-
-    #                     if( len( intersection ) == 0 ):
-    #                         intersection = accumulated
-    #                     else:
-    #                         intersection = intersection.intersection( accumulated )
-
-    #                 out_dep[in_node] = union - intersection
-
-    #     # Return a graph where each node is unioned with the cutset node
-    #     for node, data in self.nodes.data():
-    #         print( 'node', node )
-    #         for neighbor, accumulated in data['cutset_dependence'].items():
-    #             print( 'neighbor', neighbor, 'accumulated', accumulated )
-
-    def elimination_heuristic( self, graph, heuristic='min_fill_in', top_choices=4, selector='inverse_fill_in' ):
-        """ Find the next node to eliminate.  Do this by evaluating the heuristic
-            over all of the nodes and taking the top choices.  Then, draw the node
-            according to some distribution. (https://youtu.be/PXLNbueWCug?t=4046)
+    def variable_elimination( self,
+                              clique_factorization=None,
+                              return_maximal_cliques=False,
+                              heuristic='min_fill_in',
+                              top_choices=4,
+                              selector='inverse_fill_in',
+                              draw=False ):
+        """ Run variable elimination using a heuristic
 
         Args:
-            graph         - The current induced graph
-            heuristic     - The search heuristic
-            top_choices   - How many of the best nodes to consider
+            clique_factorization   - The known cliques that make up the joint distribution
+            return_maximal_cliques - Whether or not to return the maximal cliques of the induced graph
+            heuristic              - The search heuristic
+            top_choices            - How many of the best nodes to consider
+            selector               - How to sample from the top choices
+            draw                   - Whether or not to draw the induced graphs
 
         Returns:
-            node - The next node to eliminate in graph
+            order               - The elimination order
+            factor_instructions - The instructions on how to create the factors
         """
-        assert heuristic in [ 'min_fill_in' ]
-        # assert heuristic in [ 'min_fill_in', 'min_size', 'min_weight' ]
-        assert selector in [ 'inverse_fill_in' ]
 
-        def min_fill( node ):
+        elimination_args = dict( heuristic=heuristic, top_choices=top_choices, selector=selector )
+
+        def fill_in_to_weight( value ):
+            if( value == 0 ):
+                return 50
+            return 10 / value**2
+
+        def n_fill_in( graph, node ):
             neighbors = list( graph.neighbors( node ) )
             clique_size = ( len( neighbors )**2 - len( neighbors ) ) / 2
             connecting_edges = graph.subgraph( neighbors ).number_of_edges()
             return clique_size - connecting_edges
 
-        # Find the best nodes to use
-        best_nodes = nsmallest( top_choices, graph.nodes, key=min_fill )
+        def weight_for_node( graph, node ):
+            fill_in = n_fill_in( graph, node )
+            return fill_in_to_weight( fill_in )
 
-        # Sample the next node
-        if( selector == 'inverse_fill_in' ):
-            probs = np.array( [ min_fill( node ) for node in best_nodes ] )
-            probs[probs!=0] = 1 / probs[probs!=0]
-            probs[probs==0] = 999999999999999999
-            probs /= probs.sum()
+        def update_elimination_queue( elimination_queue, graph, node, node_to_data, data_to_node ):
+            if( node in node_to_data ):
+                # Remove the node
+                data = node_to_data[ node ]
+                elimination_queue.remove( data )
+                del node_to_data[ node ]
+                del data_to_node[ data ]
+            # Add the updated weight
+            weight = weight_for_node( induced_graph, node )
+            data = NodeData( weight )
+            node_to_data[ node ] = data
+            data_to_node[ data ] = node
+            elimination_queue.add( data )
 
-        index = np.random.choice( len( best_nodes ), 1, p=probs )[0]
+        # Run the elimination algorithm to find the elimination cliques
+        order = []
+        maximal_cliques = []
+        factor_instructions = []
+        induced_graph = self.copy()
 
-        return best_nodes[index]
+        # Create the elimination queue
+        node_to_data = {}
+        data_to_node = {}
+        elimination_queue = RedBlackTree()
+        for node in induced_graph.nodes:
+            update_elimination_queue( elimination_queue, induced_graph, node, node_to_data, data_to_node )
 
-    def junction_tree( self, **elimination_args ):
-        """ Construct a junction tree over this graph
+        factors = set()
+        i = 0
+        while( len( induced_graph.nodes ) > 0 ):
+
+            if( draw == True ):
+                induced_graph.draw( output_name='induced_graph_%d'%( i ) )
+
+            i += 1
+
+            # Find the next node to eliminate and remove node from the elimination queue
+            data = elimination_queue.sample()
+            node = data_to_node[ data ]
+            elimination_queue.remove( data )
+            del node_to_data[ node ]
+            del data_to_node[ data ]
+
+            # Keep track of the elimination order
+            order.append( node )
+
+            # Find the neighbors and make the tuple of nodes in the elimination clique
+            neighbors = tuple( sorted( list( induced_graph.neighbors( node ) ) ) )
+            elimination_nodes = tuple( sorted( [ node ] + list( neighbors ) ) )
+
+            # Go through all of the cliques in the current scope of nodes and see which
+            # ones we need in order to compute the next factor
+            current_scope = induced_graph.subgraph( elimination_nodes )
+            all_cliques = nx.enumerate_all_cliques( current_scope )
+
+            # Find the cliques that are needed to compute the next factor
+            factors_to_combine = []
+            for clique in all_cliques:
+                sorted_clique = tuple( sorted( clique ) )
+                if( clique_factorization is None or ( ( sorted_clique in clique_factorization ) or ( sorted_clique in factors ) ) ):
+                    factors_to_combine.append( sorted_clique )
+
+            # Add the terms used to the next factor
+            factors.add( neighbors )
+
+            # Update the instructions
+            factor_instructions.append( MarkovNetwork.MaximalCliqueInstructions( node, elimination_nodes, factors_to_combine ) )
+
+            # Check to see if the current elimination clique is maximal.
+            # There is probably a better way to do this
+            if( return_maximal_cliques ):
+                is_maximal_clique = True
+                elimination_clique = self.build_clique( elimination_nodes )
+                for max_clique in maximal_cliques:
+                    if( elimination_clique.is_subset( max_clique ) ):
+                        is_maximal_clique = False
+                        break
+
+                if( is_maximal_clique ):
+                    maximal_cliques.append( elimination_clique )
+
+            # Remove the current node and add in the fill-in edges
+            induced_graph.remove_nodes_from( [ node ] )
+            induced_graph.add_edges_from( Clique.edges_for( neighbors ) )
+
+            # Re-calculate the fill in weights for each of the neighbors
+            for neighbor in neighbors:
+                update_elimination_queue( elimination_queue, induced_graph, neighbor, node_to_data, data_to_node )
+
+        if( return_maximal_cliques ):
+            return order, factor_instructions, maximal_cliques
+
+        return order, factor_instructions
+
+    def junction_tree( self, triangulated_graph_maximal_cliques ):
+        """ Construct a junction tree using the maximal cliques of a triangulated graph.
+            Call this after getting the maximal cliques from variable elimination
 
         Args:
-            elimination_args - See elimination_heuristic
+            triangulated_graph_maximal_cliques - The max cliques of a triangulated graph
 
         Returns:
             junction_tree - The junction tree
         """
         from host.src.junction_tree import JunctionTree
 
-        # Run the elimination algorithm to find the elimination cliques
-        maximal_cliques = []
-        induced_graph = self.copy()
-        while( len( induced_graph.nodes ) > 0 ):
-
-            # Find the next node to eliminate
-            node = self.elimination_heuristic( induced_graph, **elimination_args )
-
-            neighbors = list( induced_graph.neighbors( node ) )
-            elimination_clique = Clique( set( [ node ] + neighbors ) )
-
-            # Check to see if the current elimination clique is maximal.
-            # If it is not a subset of a previous maxclique, then it is maximal (https://youtu.be/7SB67giDEsE?t=2738)
-            is_maximal_clique = True
-            for max_clique in maximal_cliques:
-                if( elimination_clique.is_subset( max_clique ) ):
-                    is_maximal_clique = False
-                    break
-
-            if( is_maximal_clique ):
-                maximal_cliques.append( elimination_clique )
-
-            # Remove the current node and add in the fill-in edges
-            induced_graph.remove_nodes_from( [ node ] )
-            induced_graph.add_edges_from( Clique.edges_for( neighbors ) )
-
         # Construct a cluster graph from the maxcliques and weight the edges with the intersection size
         # (https://youtu.be/TddbmU9dHgA?t=4544)
         cluster_graph = MarkovNetwork()
 
-        for i, max_clique1 in enumerate( maximal_cliques ):
-            for j, max_clique2 in enumerate( maximal_cliques ):
+        for i, max_clique1 in enumerate( triangulated_graph_maximal_cliques ):
+            for j, max_clique2 in enumerate( triangulated_graph_maximal_cliques ):
                 if( i == j ):
                     continue
 
@@ -433,11 +400,7 @@ class MarkovNetwork( nx.Graph ):
                     cluster_graph.add_edge( max_clique1, max_clique2, weight=len( intersection ) )
 
         # Finally, find a maximal spanning tree for the cluster graph
-        junction_tree = JunctionTree( nx.maximum_spanning_tree( cluster_graph ) )
-
-        sparse = junction_tree.to_sparse()
-
-        return junction_tree
+        return JunctionTree( nx.maximum_spanning_tree( cluster_graph ) )
 
     def set_clique_potentials( self, potential_map ):
         """ Set the clique potentials for all of the nodes.  Will only go over the max cliques because any

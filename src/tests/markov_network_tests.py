@@ -1,7 +1,9 @@
 from host.src.markov_network import MarkovNetwork
 from host.src.junction_tree import JunctionTree
+from host.src.discrete_network import DiscreteNetwork
 import time
 import networkx as nx
+import numpy as np
 
 __all__ = [ 'allMarkovNetworkTests' ]
 
@@ -17,17 +19,6 @@ def sparse_graph_test():
     print( graph.summary )
     print( graph_back.summary )
 
-def cutset_test():
-    graph = MarkovNetwork.some_graph()
-    graph.draw( output_folder='/app/host', output_name='graph' )
-    cutset = graph.get_cutset()
-
-    cut_graph = graph.copy()
-    cut_graph.remove_nodes_from( cutset )
-    cut_graph.draw( output_folder='/app/host', output_name='cut_graph' )
-
-    cluster_graph = graph.cutset_clustering( cutset )
-
 def message_passing_test():
     graph = MarkovNetwork.some_graph()
     graph.draw()
@@ -36,7 +27,7 @@ def message_passing_test():
     total_messages = set()
     for m in messages:
         message_set = set()
-        for b in m.tolist():
+        for b in m:
             message_set.add( tuple( b ) )
 
         print( 'message_set', message_set )
@@ -47,40 +38,78 @@ def message_passing_test():
 def junction_tree_test():
     jt = JunctionTree.example_junction_tree()
     jt.draw()
-    rip = JunctionTree.satisfies_running_intersection_property( jt )
+    rip = jt.has_running_intersection_property()
     print( 'Satisfies rip:', rip, 'Expect True' )
 
     jt = JunctionTree.example_non_junction_tree()
     jt.draw()
-    rip = JunctionTree.satisfies_running_intersection_property( jt )
+    rip = jt.has_running_intersection_property()
     print( 'Satisfies rip:', rip, 'Expect False' )
 
 def junction_tree_conversion_test():
     graph = MarkovNetwork( nx.karate_club_graph() )
     graph.draw( output_folder='/app/host', output_name='graph' )
 
-    junction_tree = graph.junction_tree()
+    junction_tree, _ = graph.junction_tree()
 
     is_jt = JunctionTree.is_junction_tree( graph, junction_tree )
 
     print( 'is_jt', is_jt )
 
 def junction_tree_inference_test():
-    graph = MarkovNetwork( nx.circular_ladder_graph( 5 ) )
-    graph.remove_nodes_from( [ 0, 5 ] )
+    graph = DiscreteNetwork( nx.karate_club_graph() )
+    # graph = DiscreteNetwork( nx.generators.balanced_tree( 2, 5 ) )
+    print( 'Number of nodes', len( list( graph.nodes ) ) )
+    print( 'Number of edges', len( list( graph.edges ) ) )
+    # graph = DiscreteNetwork( nx.karate_club_graph() )
+    # graph = DiscreteNetwork( nx.circular_ladder_graph( 10 ) )
+    # graph.remove_nodes_from( [ 0, 5 ] )
     graph.draw()
 
-    junction_tree = graph.junction_tree()
+    # Set the state sizes
+    state_sizes = dict( [ ( node, 2 ) for node in graph.nodes ] )
+    # state_sizes = dict( [ ( node, np.random.randint( 3, 8 ) ) for node in graph.nodes ] )
+    graph.set_state_sizes( state_sizes )
+
+    # Set the clique potentials
+    # DON'T USE A BIG GRAPH!!!! THIS IS JUST FOR TESTING
+    max_cliques = [ tuple( sorted( x ) ) for x in nx.find_cliques( graph )  ]
+    clique_sizes = [ tuple( [ state_sizes[node] for node in max_clique ] ) for max_clique in max_cliques ]
+    potentials = dict( [ ( max_clique, np.random.random( clique_size ) ) for max_clique, clique_size in zip( max_cliques, clique_sizes ) ] )
+    graph.set_potentials( potentials )
+
+    ######################################################
+    start = time.time()
+
+    # Run variable elimination
+    order, max_clique_potential_instructions, maximal_cliques = graph.variable_elimination( potentials,
+                                                                                            return_maximal_cliques=True,
+                                                                                            draw=False )
+
+    # Create the junction tree and the computation instructions
+    junction_tree = graph.junction_tree( maximal_cliques )
     junction_tree.draw()
+    instructions = junction_tree.shafer_shenoy_inference_instructions()
 
+    # Generate the instructions to do inference
+    supernode_potential_instructions = graph.parse_max_clique_potential_instructions( max_clique_potential_instructions, junction_tree.nodes )
+    separators, computation_instructions = graph.parse_inference_instructions( instructions )
 
+    # Generate the contractions list.  This makes the log_einsum calls fast
+    contraction_lists = graph.generate_contractions( supernode_potential_instructions, separators, computation_instructions )
 
-    print( junction_tree.nodes )
+    ######################################################
+
+    # Run inference.
+    comp_start = time.time()
+    graph.perform_message_passing( supernode_potential_instructions, separators, computation_instructions, contraction_lists )
+
+    print( 'Total computation time', time.time() - comp_start )
+    print( 'Total time', time.time() - start )
 
 def allMarkovNetworkTests():
     # test_to_bayesian_network()
     # sparse_graph_test()
-    # cutset_test()
     # message_passing_test()
     # junction_tree_test()
     # junction_tree_conversion_test()
