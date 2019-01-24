@@ -6,7 +6,6 @@ from compiled.message_passing import *
 from host.src.clique import Clique
 from heapq import nsmallest
 from collections import namedtuple
-from sortedcontainers import SortedDict
 from .red_black_tree import RedBlackTree, NodeData
 
 class MarkovNetwork( nx.Graph ):
@@ -398,6 +397,8 @@ class MarkovNetwork( nx.Graph ):
                 # A cluster graph has edges when the clusters have intersection
                 if( len( intersection ) > 0 ):
                     cluster_graph.add_edge( max_clique1, max_clique2, weight=len( intersection ) )
+
+        cluster_graph.draw( output_name='cluster_graph' )
 
         # Finally, find a maximal spanning tree for the cluster graph
         return JunctionTree( nx.maximum_spanning_tree( cluster_graph ) )

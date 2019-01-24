@@ -7,7 +7,7 @@ from collections import namedtuple
 
 class JunctionTree( MarkovNetwork ):
 
-    MessageInstruction = namedtuple( 'MessageInstruction', [ 'message', 'incoming_messages', 'integrate_out' ] )
+    MessageInstruction = namedtuple( 'MessageInstruction', [ 'message', 'incoming_messages', 'separator_nodes' ] )
 
     @property
     def super_nodes( self ):
@@ -230,16 +230,15 @@ class JunctionTree( MarkovNetwork ):
             batch = []
             for potential_in, potential_out in potential_batch:
 
-                difference = potential_in.difference( potential_out )
-                nodes_in  = tuple( potential_in.nodes )
-                nodes_out = tuple( potential_out.nodes )
+                nodes_in        = tuple( potential_in.nodes )
+                nodes_out       = tuple( potential_out.nodes )
+                separator_nodes = tuple( potential_in.intersection( potential_out ) )
 
                 # Each edge represents a message
                 message           = MarkovNetwork.Message( nodes_in, nodes_out )
-                integrate_out     = tuple( difference )
                 incoming_messages = [ MarkovNetwork.Message( tuple( neighbor.nodes ), nodes_in ) for neighbor in self.neighbors( nodes_in ) if neighbor != nodes_out ]
 
-                batch.append( JunctionTree.MessageInstruction( message, incoming_messages, integrate_out ) )
+                batch.append( JunctionTree.MessageInstruction( message, incoming_messages, separator_nodes ) )
 
             message_instructions.append( batch )
 
@@ -250,9 +249,9 @@ class JunctionTree( MarkovNetwork ):
             nodes             = tuple( clique.nodes )
             message           = MarkovNetwork.Message( nodes, nodes )
             incoming_messages = [ MarkovNetwork.Message( tuple( neighbor.nodes ), nodes ) for neighbor in self.neighbors( nodes ) ]
-            integrate_out     = tuple( [] )
+            separator_nodes   = nodes
 
-            batch.append( JunctionTree.MessageInstruction( message, incoming_messages, integrate_out ) )
+            batch.append( JunctionTree.MessageInstruction( message, incoming_messages, separator_nodes ) )
         message_instructions.append( batch )
 
         return message_instructions

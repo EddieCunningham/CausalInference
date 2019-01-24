@@ -118,16 +118,21 @@ class DiscreteNetwork( MarkovNetwork ):
         computation_instructions = []
         messages = {}
 
+        # NODE MAP SHOULD MAP MESSAGES TO LETTERS, NOT NODES!!!!!!
+        message_separator_nodes = {}
+
         # Figure out the message passing computations
         for instruction_batch in message_instructions:
 
-            for message, incoming_messages, integrate_out in instruction_batch:
+            for message, incoming_messages, separator_nodes in instruction_batch:
 
                 origin_nodes, destination_nodes = message
 
-                # Collect the nodes
-                incoming_nodes = [ list( message.outgoing ) for message in incoming_messages ]
-                node_lists = [ list( destination_nodes ), *incoming_nodes ]
+                message_separator_nodes[ message ] = separator_nodes
+
+                # Collect the nodes.  origin_nodes are the nodes that are in the potential that we use
+                incoming_separators = [ list( message_separator_nodes[ message ] ) for message in incoming_messages ]
+                node_lists = [ list( origin_nodes ), *incoming_separators ]
 
                 # Assign a letter for each unique node
                 unique_nodes = sorted( list( set( reduce( lambda x, y : x + y, node_lists ) ) ) )
@@ -137,14 +142,14 @@ class DiscreteNetwork( MarkovNetwork ):
                 contract = ','.join( [ ''.join( [ node_map[node] for node in node_list ] ) for node_list in node_lists ] )
 
                 # See what we should keep
-                remaining_nodes = [ node for node in unique_nodes if node not in integrate_out ]
-                contract += '->' + ''.join( [ node_map[ node ] for node in remaining_nodes ] )
+                contract += '->' + ''.join( [ node_map[ node ] for node in separator_nodes ] )
 
                 # Store the size of this message and the nodes it is over
-                messages[message] = DiscreteNetwork.MessageSize( remaining_nodes, [ self.state_sizes[node] for node in remaining_nodes ] )
+                messages[message] = DiscreteNetwork.MessageSize( separator_nodes, [ self.state_sizes[node] for node in separator_nodes ] )
 
                 # Append to the total list of computations
-                instruction = DiscreteNetwork.ComputationInstruction( message, destination_nodes, incoming_messages, contract )
+                instruction = DiscreteNetwork.ComputationInstruction( message, origin_nodes, incoming_messages, contract )
+
                 computation_instructions.append( instruction )
 
         return messages, computation_instructions
@@ -252,8 +257,11 @@ class DiscreteNetwork( MarkovNetwork ):
         for ( nodes, _ ), data in filter( lambda x: x[0][0]==x[0][1], message_objects.items() ):
 
             # See which marginals are needed within this cluster
-            needed = [ node for node in nodes if node not in marginals ]
-            # needed = nodes
+            needed = nodes#[ node for node in nodes if node not in marginals ]
+
+            print( nodes )
+
+            potential = potentials[nodes]
 
             for node in needed:
 
@@ -263,9 +271,9 @@ class DiscreteNetwork( MarkovNetwork ):
 
                 contract = ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) ] ) + '->'
                 total = log_einsum( contract, data )
-            #     print( node, total, marginals[node] - total )
+                print( node, total, marginals[node] - total )
 
-            # print()
+            print()
 
     def is_consistent( self ):
         """ Check to see if inference worked.  This is done by seeing if
