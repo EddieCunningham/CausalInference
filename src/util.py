@@ -5,7 +5,8 @@ from collections import deque
 
 __all__ = [ 'log_einsum', 'log_einsum_path' ]
 
-def log_einsum_path( contract, *shapes ):
+# def log_einsum_path( contract, *shapes ):
+def log_einsum_path( contract, *args ):
     """ Return the contraction list for args that have the given shapes
         Also returns the shape of the output
 
@@ -17,7 +18,8 @@ def log_einsum_path( contract, *shapes ):
             The shape of the result and the contraction order
     """
     # contract_path requires a numpy array
-    args = [ np.empty( shape ) for shape in shapes ]
+    shapes = [ arg.shape for arg in args ]
+    # args = [ np.empty( shape ) for shape in shapes ]
     _, contraction_list = contract_path( contract, *args, einsum_call=True, optimize='auto' )
 
     # Compute the output shape
@@ -28,8 +30,8 @@ def log_einsum_path( contract, *shapes ):
         for letter, size in zip( operand, shape ):
             letter_sizes[unique_letters.index( letter )] = size
 
-    output_shape = tuple( [ letter_sizes[unique_letters.index( letter )] for letter in result ] )
-    return output_shape, contraction_list
+    output_shape = tuple( [ letter_sizes[unique_letters.index( letter ) ] for letter in result ] )
+    return np.empty( output_shape ), contraction_list
 
 def log_einsum( contract, *args, contraction_list=None, _test=False ):
     """ Taken from here https://github.com/dgasmith/opt_einsum/blob/master/opt_einsum/contract.py
@@ -71,7 +73,7 @@ def log_einsum( contract, *args, contraction_list=None, _test=False ):
     transpose_back = [ 0 for _ in unique_letters ]
 
     # Start contraction loop
-    for num, ( inds, idx_rm, einsum_str, remaining, _ ) in enumerate(contraction_list):
+    for num, ( inds, idx_rm, einsum_str, remaining, _ ) in enumerate( contraction_list ):
 
         # Retrieve the current operands and get split the contract
         tmp_operands = [ operands.pop(x) for x in inds ]
@@ -114,7 +116,9 @@ def log_einsum( contract, *args, contraction_list=None, _test=False ):
                 remove_idx = tuple( list( range( len( results_index ), n_unique_letters ) ) )
                 new_view = integrate( swapped_summed, axis=remove_idx )
             else:
-                new_view = swapped_summed.squeeze()
+                # Don't squeeze the first dim!  This messes things up if we have a batch size of 1!
+                trailing_ones = tuple( [ i for i, s in enumerate( swapped_summed.shape ) if s == 1 and i > 0 ] )
+                new_view = swapped_summed.squeeze( axis=trailing_ones )
 
         else:
 
@@ -133,9 +137,9 @@ def log_einsum( contract, *args, contraction_list=None, _test=False ):
     return operands[0]
 
 if( __name__ == '__main__' ):
-    I = np.random.rand(10, 10, 10, 10)
-    C = np.random.rand(10, 10)
-    operands, contraction_list = contract_path('ea,fb,abcd,gc,hd->efgh', C, C, I, C, C, einsum_call=True)
+    I = np.random.rand(1, 10, 10, 10, 10)
+    C = np.random.rand(1, 10, 10)
+    operands, contraction_list = contract_path('tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C, einsum_call=True)
 
-    ans = log_einsum('ea,fb,abcd,gc,hd->efgh', C, C, I, C, C)
-    print( (np.sin(ans)**2).sum() - (np.sin(np.einsum('ea,fb,abcd,gc,hd->efgh', C, C, I, C, C))**2).sum() )
+    ans = log_einsum('tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C, _test=True)
+    print( (np.sin(ans)**2).sum() - (np.sin(np.einsum('tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C))**2).sum() )

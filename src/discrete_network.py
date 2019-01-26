@@ -16,9 +16,10 @@ class DiscreteNetwork( MarkovNetwork ):
                                                                                          'contract',
                                                                                          'keep_full_factor' ] )
     ComputationInstruction = namedtuple( 'ComputationInstruction', [ 'message',
-                                                                     'node_in_potential',
+                                                                     'nodes_in_potential',
                                                                      'incoming_messages',
                                                                      'contract' ] )
+    BatchedInstruction = namedtuple( 'BatchedInstruction', [ 'batch_contract', 'instruction' ] )
     MessageSize = namedtuple( 'MessageSize', [ 'nodes', 'state_sizes' ] )
 
     def set_potentials( self, potentials ):
@@ -117,22 +118,23 @@ class DiscreteNetwork( MarkovNetwork ):
 
         computation_instructions = []
         messages = {}
-
-        # NODE MAP SHOULD MAP MESSAGES TO LETTERS, NOT NODES!!!!!!
         message_separator_nodes = {}
 
         # Figure out the message passing computations
         for instruction_batch in message_instructions:
 
+            # Process each instruction in this batch
+            batch = []
             for message, incoming_messages, separator_nodes in instruction_batch:
 
                 origin_nodes, destination_nodes = message
+                nodes_in_potential = origin_nodes
 
                 message_separator_nodes[ message ] = separator_nodes
 
-                # Collect the nodes.  origin_nodes are the nodes that are in the potential that we use
+                # Collect the nodes.
                 incoming_separators = [ list( message_separator_nodes[ message ] ) for message in incoming_messages ]
-                node_lists = [ list( origin_nodes ), *incoming_separators ]
+                node_lists = [ list( nodes_in_potential ), *incoming_separators ]
 
                 # Assign a letter for each unique node
                 unique_nodes = sorted( list( set( reduce( lambda x, y : x + y, node_lists ) ) ) )
@@ -148,9 +150,42 @@ class DiscreteNetwork( MarkovNetwork ):
                 messages[message] = DiscreteNetwork.MessageSize( separator_nodes, [ self.state_sizes[node] for node in separator_nodes ] )
 
                 # Append to the total list of computations
-                instruction = DiscreteNetwork.ComputationInstruction( message, origin_nodes, incoming_messages, contract )
+                instruction = DiscreteNetwork.ComputationInstruction( message, nodes_in_potential, incoming_messages, contract )
 
-                computation_instructions.append( instruction )
+                batch.append( instruction )
+
+            # Computations can only be batched if they have the same contract and if their contract has the same sized dimensions
+            group_by_contract_then_size = {}
+            for instruction in batch:
+                message, nodes_in_potential, incoming_messages, contract = instruction
+
+                # Find the sizes for the contract
+                potential_sizes = [ self.state_sizes[node] for node in nodes_in_potential ]
+                incoming_sizes = [ messages[in_message].state_sizes for in_message in incoming_messages ]
+                contract_sizes = tuple( reduce( lambda x,y:x+y, [ potential_sizes, *incoming_sizes ] ) )
+
+                if( contract not in group_by_contract_then_size ):
+                    group_by_contract_then_size[contract] = {}
+
+                if( contract_sizes not in group_by_contract_then_size[contract] ):
+                    group_by_contract_then_size[contract][contract_sizes] = []
+
+                # Add the current instruction to the group
+                group_by_contract_then_size[contract][contract_sizes].append( instruction )
+
+            # Group the messages together in batches and create the new contract
+            batch_letter = alphabet[-1]
+            batched_instructions = []
+            for contract, sizes_and_messages in group_by_contract_then_size.items():
+                for sizes, instructions in sizes_and_messages.items():
+
+                    new_contract = ( ',' + batch_letter ).join( contract.split( ',' ) )
+                    new_contract = batch_letter + ( '->' + batch_letter ).join( new_contract.split( '->' ) )
+                    batched_instruction = DiscreteNetwork.BatchedInstruction( new_contract, instructions )
+
+                    batched_instructions.append( batched_instruction )
+
+            computation_instructions.extend( batched_instructions )
 
         return messages, computation_instructions
 
@@ -173,7 +208,7 @@ class DiscreteNetwork( MarkovNetwork ):
         contraction_lists = []
 
         # Build the clique potentials
-        potentials = dict( [ ( key, potential.shape ) for key, potential in self.potentials.items() ] )
+        potentials = dict( [ ( key, np.empty( potential.shape ) ) for key, potential in self.potentials.items() ] )
 
         for node_to_eliminate, nodes, other_potentials, contract, keep in supernode_potential_instructions:
 
@@ -191,16 +226,18 @@ class DiscreteNetwork( MarkovNetwork ):
                 contraction_lists.append( cont_list )
 
         # Perform the inference computations
-        message_objects = dict( [ ( message, s.state_sizes ) for message, s in messages.items() ] )
-        for instruction in computation_instructions:
+        message_objects = dict( [ ( message, np.empty( s.state_sizes ) ) for message, s in messages.items() ] )
+        for batched_contract, instructions in computation_instructions:
 
-            # Unpack this instruction
-            message = message_objects[instruction.message]
-            incoming_messages = [ message_objects[message] for message in instruction.incoming_messages ]
-            potential = potentials[instruction.node_in_potential]
+            # Find the potential objects
+            all_potentials = np.array( [ potentials[instruction.nodes_in_potential] for instruction in instructions ] )
+
+            # Batch the incoming message objects
+            incoming_message_batches = zip( *[ instruction.incoming_messages for instruction in instructions ] )
+            incoming_message_tensors = [ np.array( [ message_objects[message] for message in message_batch ] ) for message_batch in incoming_message_batches ]
 
             # Do the actual computation
-            message, cont_list = log_einsum_path( instruction.contract, potential, *incoming_messages )
+            message, cont_list = log_einsum_path( batched_contract, all_potentials, *incoming_message_tensors )
             contraction_lists.append( cont_list )
 
         return contraction_lists
@@ -242,24 +279,31 @@ class DiscreteNetwork( MarkovNetwork ):
                 potentials[nodes] = log_einsum( contract, *[ potentials[other_nodes] for other_nodes in other_potentials ], contraction_list=next( contraction_iter ) )
 
         # Perform the inference computations
-        message_objects = dict( [ ( message, np.zeros( s.state_sizes ) ) for message, s in messages.items() ] )
-        for instruction in computation_instructions:
+        message_objects = dict( [ ( message, np.empty( s.state_sizes ) ) for message, s in messages.items() ] )
+        for batched_contract, instructions in computation_instructions:
 
-            # Unpack this instruction
-            incoming_messages = [ message_objects[message] for message in instruction.incoming_messages ]
-            potential = potentials[instruction.node_in_potential]
+            # Find the potential objects
+            all_potentials = np.array( [ potentials[instruction.nodes_in_potential] for instruction in instructions ] )
+
+            # Batch the incoming message objects
+            incoming_message_batches = zip( *[ instruction.incoming_messages for instruction in instructions ] )
+            incoming_message_tensors = [ np.array( [ message_objects[message] for message in message_batch ] ) for message_batch in incoming_message_batches ]
 
             # Do the actual computation
-            message_objects[instruction.message] = log_einsum( instruction.contract, potential, *incoming_messages, contraction_list=next( contraction_iter ) )
+            message = log_einsum( batched_contract, all_potentials, *incoming_message_tensors, contraction_list=next( contraction_iter ) )
+
+            # Copy the results back to the appropriate message objects
+            for i, instruction in enumerate( instructions ):
+                message_objects[instruction.message] = message[i]
 
         # Collect the clique potentials
         marginals = {}
         for ( nodes, _ ), data in filter( lambda x: x[0][0]==x[0][1], message_objects.items() ):
 
             # See which marginals are needed within this cluster
-            needed = nodes#[ node for node in nodes if node not in marginals ]
+            needed = [ node for node in nodes if node not in marginals ]
 
-            print( nodes )
+            # print( nodes )
 
             potential = potentials[nodes]
 
@@ -274,6 +318,8 @@ class DiscreteNetwork( MarkovNetwork ):
                 print( node, total, marginals[node] - total )
 
             print()
+
+        return marginals
 
     def is_consistent( self ):
         """ Check to see if inference worked.  This is done by seeing if

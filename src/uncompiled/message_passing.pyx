@@ -58,7 +58,7 @@ cdef void polyforest_message_passing( int[:]       polyforest,
     # The final messages will have exactly as many elements as the polyforest.
     cdef int[:] message_counts
     cdef int last_message_index = 0
-    cdef int message_index = 0
+    cdef int message_index      = 0
 
     cdef int recorded_index
     cdef int i, j
