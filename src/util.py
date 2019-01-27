@@ -137,9 +137,9 @@ def log_einsum( contract, *args, contraction_list=None, _test=False ):
     return operands[0]
 
 if( __name__ == '__main__' ):
-    I = np.random.rand(1, 10, 10, 10, 10)
-    C = np.random.rand(1, 10, 10)
-    operands, contraction_list = contract_path('tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C, einsum_call=True)
+    I = np.random.rand( 1, 10, 10, 10, 10 )
+    C = np.random.rand( 1, 10, 10 )
+    operands, contraction_list = contract_path( 'tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C, einsum_call=True )
 
     ans = log_einsum('tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C, _test=True)
-    print( (np.sin(ans)**2).sum() - (np.sin(np.einsum('tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C))**2).sum() )
+    print( ( np.sin( ans )**2 ).sum() - ( np.sin(np.einsum('tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C ) )**2 ).sum() )

@@ -5,7 +5,7 @@ import itertools
 from host.src.clique import DiscreteClique
 import string
 from functools import reduce
-from collections import namedtuple
+from collections import namedtuple, Iterable
 from .util import log_einsum, log_einsum_path
 
 class DiscreteNetwork( MarkovNetwork ):
@@ -23,7 +23,7 @@ class DiscreteNetwork( MarkovNetwork ):
     MessageSize = namedtuple( 'MessageSize', [ 'nodes', 'state_sizes' ] )
 
     def set_potentials( self, potentials ):
-        """ Set the clique potentials
+        """ Set the clique potentials.  THESE MUST BE IN LOG SPACE
 
         Args:
             potentials - A dictionary indexed by a sorted tuple of nodes with the potentials as values
@@ -31,16 +31,21 @@ class DiscreteNetwork( MarkovNetwork ):
         Returns:
             None
         """
-        self.potentials = potentials
+        assert isinstance( potentials, dict )
+        for nodes, value in potentials.items():
+            assert tuple( sorted( nodes ) ) == nodes
+            assert isinstance( value, np.ndarray )
+        self.potentials          = potentials
+        self.evidence_potentials = potentials
 
     def set_state_sizes( self, state_sizes ):
         """ Set the state sizes for all of the nodes
 
         Args:
-            nodes - A list of nodes to build a clique over
+            state_sizes - The state sizes for each node
 
         Returns:
-            clique - The clique object
+            None
         """
         self.state_sizes = state_sizes
 
@@ -60,6 +65,63 @@ class DiscreteNetwork( MarkovNetwork ):
         assert hasattr( self, 'state_sizes' ), 'Need to specify the state sizes for the nodes'
         return super().junction_tree( *args, **kwargs )
 
+    def add_evidence( self, nodes, data ):
+        """ Add evidence to the graph.  If there is more than one piece of data for a node,
+            then just multiply the potentials together (add in log space).
+
+        Args:
+            nodes - A list of nodes
+            data  - A list of data for each node.  This should be all of the evidence
+                    observed for this node.  There can be multiple possible states
+                    for each observation
+
+        Returns:
+            None
+        """
+        if( not isinstance( nodes, Iterable ) ):
+            nodes = [ nodes ]
+        if( not isinstance( data, Iterable ) ):
+            data = [ data ]
+        assert len( nodes ) == len( data )
+
+        # This must be a 2d array with dims ( observation, possible states )
+        for possible_states_over_all_observations in data:
+            assert isinstance( possible_states_over_all_observations, Iterable )
+            for possible_states in possible_states_over_all_observations:
+                assert isinstance( possible_states, Iterable )
+
+        # Reset the evidence potentials
+        for node in nodes:
+            for clique in self.potentials.keys():
+                if( node in clique ):
+                    self.evidence_potentials[clique] = np.zeros( self.evidence_potentials[clique].shape )
+
+        # Accumulate the total evidence
+        for node, possible_states_over_all_observations in zip( nodes, data ):
+            assert isinstance( possible_states_over_all_observations, Iterable )
+
+            # Find the potentials that node is a part of
+            for clique, value in self.potentials.items():
+                if( node in clique ):
+
+                    # Find the impossible states
+                    axis = clique.index( node )
+                    state_size = self.state_sizes[node]
+
+                    # For every observation, update the evidence
+                    for possible_states in possible_states_over_all_observations:
+                        impossible_states = np.setdiff1d( np.arange( state_size ), possible_states )
+
+                        # Create an indexer to select all of the impossible states
+                        impossible_indices = [ slice( 0, size ) if i != axis else impossible_states for i, size in enumerate( self.potentials[clique].shape ) ]
+
+                        # Create the zero'd out potential
+                        potential = self.potentials[clique].copy()
+                        potential[impossible_indices] = np.NINF
+
+                        # Update the evidence potential
+                        self.evidence_potentials[clique] += potential
+
     def parse_max_clique_potential_instructions( self, max_clique_potential_instructions, target_max_cliques ):
         """ Assign actual computations to the instructions
 
@@ -75,7 +137,7 @@ class DiscreteNetwork( MarkovNetwork ):
         supernode_potential_instructions = []
 
         # Create the factors
-        factors = self.potentials.copy()
+        factors = self.evidence_potentials.copy()
 
         # Figure out the clique potential instructions
         for node_to_eliminate, elimination_nodes, factors_to_combine in max_clique_potential_instructions:
@@ -112,7 +174,6 @@ class DiscreteNetwork( MarkovNetwork ):
             messages                 - Holds the nodes that the separator encapsulates and the state sizes for the nodes
             computation_instructions - Actually what to do
         """
-        # TODO: Make batched computations
 
         alphabet = string.ascii_letters
 
@@ -189,6 +250,77 @@ class DiscreteNetwork( MarkovNetwork ):
 
         return messages, computation_instructions
 
+    def evaluate_instruction_complexity( self,
+                                         supernode_potential_instructions,
+                                         messages,
+                                         computation_instructions,
+                                         gpu_support=True ):
+        """ Determing how fast it will be to do computations on the given instructions.
+
+        Args:
+            supernode_potential_instructions - How to get the supernode potentials
+            messages                         - Holds the nodes that the separator encapsulates and the state sizes for the nodes
+            computation_instructions         - Actually what to do
+            gpu_support                      - Whether or not we intend to do inference on a gpu
+
+        Returns:
+            A number that roughly represents the computational complexity
+        """
+        def contraction_complexity( contract, contraction_list ):
+            if( gpu_support == True ):
+                # Not using a huge dataset, so the computation its self on a gpu
+                # is probably going to be the same for each contraction regardless
+                # of the size
+                return len( contraction_list )
+
+            # Count the number of computations done.  This involves the state sizes
+            assert 0, 'Not implemented yet'
+
+        total_complexity = 0
+
+        # Build the clique potentials
+        potentials = dict( [ ( key, np.empty( potential.shape ) ) for key, potential in self.evidence_potentials.items() ] )
+
+        for node_to_eliminate, nodes, other_potentials, contract, keep in supernode_potential_instructions:
+
+            # Create the new factor
+            if( keep ):
+                all_nodes = tuple( sorted( [ node_to_eliminate ] + list( nodes ) ) )
+
+                # Create the full contration
+                new_contract, reduced_contract = contract.split( '->' )
+                expanded_contract = ''.join( sorted( list( set( new_contract ) ) ) ).replace( ',', '' )
+                new_contract += '->' + expanded_contract
+                new_contract_reduced = expanded_contract + '->' + reduced_contract
+
+                # Find the contractions
+                potentials[all_nodes], cont_list1 = log_einsum_path( new_contract, *[ potentials[other_nodes] for other_nodes in other_potentials ] )
+                potentials[nodes], cont_list2 = log_einsum_path( new_contract_reduced, potentials[all_nodes] )
+
+                # Update the total complexity
+                total_complexity += contraction_complexity( new_contract, cont_list1 )
+                total_complexity += contraction_complexity( new_contract_reduced, cont_list2 )
+            else:
+                potentials[nodes], cont_list = log_einsum_path( contract, *[ potentials[other_nodes] for other_nodes in other_potentials ] )
+                total_complexity += contraction_complexity( contract, cont_list )
+
+        # Perform the inference computations
+        message_objects = dict( [ ( message, np.empty( s.state_sizes ) ) for message, s in messages.items() ] )
+        for batched_contract, instructions in computation_instructions:
+
+            # Find the potential objects
+            all_potentials = np.array( [ potentials[instruction.nodes_in_potential] for instruction in instructions ] )
+
+            # Batch the incoming message objects
+            incoming_message_batches = zip( *[ instruction.incoming_messages for instruction in instructions ] )
+            incoming_message_tensors = [ np.array( [ message_objects[message] for message in message_batch ] ) for message_batch in incoming_message_batches ]
+
+            # Do the actual computation
+            _, cont_list = log_einsum_path( batched_contract, all_potentials, *incoming_message_tensors )
+            total_complexity += contraction_complexity( batched_contract, cont_list )
+
+        return total_complexity
+
     def generate_contractions( self,
                                supernode_potential_instructions,
                                messages,
@@ -208,7 +340,7 @@ class DiscreteNetwork( MarkovNetwork ):
         contraction_lists = []
 
         # Build the clique potentials
-        potentials = dict( [ ( key, np.empty( potential.shape ) ) for key, potential in self.potentials.items() ] )
+        potentials = dict( [ ( key, np.empty( potential.shape ) ) for key, potential in self.evidence_potentials.items() ] )
 
         for node_to_eliminate, nodes, other_potentials, contract, keep in supernode_potential_instructions:
 
@@ -263,7 +395,7 @@ class DiscreteNetwork( MarkovNetwork ):
         contraction_iter = iter( contraction_lists )
 
         # Build the clique potentials
-        potentials = self.potentials.copy()
+        potentials = self.evidence_potentials.copy()
 
         for node_to_eliminate, nodes, other_potentials, contract, keep in supernode_potential_instructions:
 
@@ -317,19 +449,75 @@ class DiscreteNetwork( MarkovNetwork ):
                 total = log_einsum( contract, data )
                 print( node, total, marginals[node] - total )
 
-            print()
-
         return marginals
 
-    def is_consistent( self ):
-        """ Check to see if inference worked.  This is done by seeing if
-            pairs of nodes at each edge marginalize to the same thing.
-            Because of the RIP, locally consistency implies global consistency
+    def find_best_elimination_order( self, n_iters=100, gpu_support=True ):
+        """ Find the elimination order that gives the most efficient computation instructions
 
         Args:
-            None
+            gpu_support - Whether or not we intend to do inference on a gpu
+            n_iters     - The number of iterations to perform
 
         Returns:
-            Whether or not tree is consistent
+            order - The best elimination order
         """
-        pass
+
+        best_order = None
+        lowest_complexity = 999999999999999999
+
+        for _ in range( n_iters ):
+
+            # Run variable elimination
+            order, max_clique_potential_instructions, maximal_cliques = self.variable_elimination( clique_factorization=self.evidence_potentials,
+                                                                                                   return_maximal_cliques=True,
+                                                                                                   draw=False )
+
+            # Create the junction tree and the computation instructions
+            junction_tree = self.junction_tree( maximal_cliques )
+            instructions = junction_tree.shafer_shenoy_inference_instructions()
+
+            # Generate the instructions to do inference
+            supernode_potential_instructions = self.parse_max_clique_potential_instructions( max_clique_potential_instructions, junction_tree.nodes )
+            separators, computation_instructions = self.parse_inference_instructions( instructions )
+
+            # See how good this order is
+            instruction_complexity = self.evaluate_instruction_complexity( supernode_potential_instructions, separators, computation_instructions, gpu_support=gpu_support )
+
+            if( ( best_order is None ) or ( instruction_complexity < lowest_complexity ) ):
+                best_order = order
+                lowest_complexity = instruction_complexity
+
+        return order, lowest_complexity
+
+    def get_computation_instructions( self, order=None ):
+        """ Get the computation instructions for an elimination order
+
+        Args:
+            order - The elimination order.  If is None, then will find (a probably suboptimal) one.
+
+        Returns:
+            supernode_potential_instructions - The instructions to compute the supernode potentials
+                                               (DiscreteNetwork.PotentialComputationInstructions)
+            separators                       - Keys for the separators (what we compute during inference)
+                                               and their state sizes (DiscreteNetwork.MessageSize)
+            computation_instructions         - The actual computations (DiscreteNetwork.ComputationInstruction)
+            contraction_lists                - The contractions for each log_einsum call in computation_instructions
+        """
+        # Run variable elimination
+        _, max_clique_potential_instructions, maximal_cliques = self.variable_elimination( clique_factorization=self.evidence_potentials,
+                                                                                           order=order,
+                                                                                           return_maximal_cliques=True,
+                                                                                           draw=False )
+
+        # Create the junction tree and the computation instructions
+        junction_tree = self.junction_tree( maximal_cliques )
+        instructions = junction_tree.shafer_shenoy_inference_instructions()
+
+        # Generate the instructions to do inference
+        supernode_potential_instructions = self.parse_max_clique_potential_instructions( max_clique_potential_instructions, junction_tree.nodes )
+        separators, computation_instructions = self.parse_inference_instructions( instructions )
+
+        # Generate the einsum contractions
+        contraction_lists = self.generate_contractions( supernode_potential_instructions, separators, computation_instructions )
+
+        return supernode_potential_instructions, separators, computation_instructions, contraction_lists

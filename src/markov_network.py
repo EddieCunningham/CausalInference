@@ -240,15 +240,19 @@ class MarkovNetwork( nx.Graph ):
 
     def variable_elimination( self,
                               clique_factorization=None,
+                              order=None,
                               return_maximal_cliques=False,
                               heuristic='min_fill_in',
                               top_choices=4,
                               selector='inverse_fill_in',
                               draw=False ):
-        """ Run variable elimination using a heuristic
+        """ Run variable elimination using a heuristic.
+            Currently only implemented min_fill_in and top_choices=N.
+            TODO:  Implement the other variable elimination options
 
         Args:
             clique_factorization   - The known cliques that make up the joint distribution
+            order                  - A known elimination order.  If unknown, will use a heuristic to find one
             return_maximal_cliques - Whether or not to return the maximal cliques of the induced graph
             heuristic              - The search heuristic
             top_choices            - How many of the best nodes to consider
@@ -292,17 +296,19 @@ class MarkovNetwork( nx.Graph ):
             elimination_queue.add( data )
 
         # Run the elimination algorithm to find the elimination cliques
-        order = []
         maximal_cliques = []
         factor_instructions = []
         induced_graph = self.copy()
+        should_find_order = order is None
 
         # Create the elimination queue
-        node_to_data = {}
-        data_to_node = {}
-        elimination_queue = RedBlackTree()
-        for node in induced_graph.nodes:
-            update_elimination_queue( elimination_queue, induced_graph, node, node_to_data, data_to_node )
+        if( should_find_order ):
+            order = []
+            node_to_data = {}
+            data_to_node = {}
+            elimination_queue = RedBlackTree()
+            for node in induced_graph.nodes:
+                update_elimination_queue( elimination_queue, induced_graph, node, node_to_data, data_to_node )
 
         factors = set()
         i = 0
@@ -314,14 +320,17 @@ class MarkovNetwork( nx.Graph ):
             i += 1
 
             # Find the next node to eliminate and remove node from the elimination queue
-            data = elimination_queue.sample()
-            node = data_to_node[ data ]
-            elimination_queue.remove( data )
-            del node_to_data[ node ]
-            del data_to_node[ data ]
+            if( should_find_order ):
+                data = elimination_queue.sample()
+                node = data_to_node[ data ]
+                elimination_queue.remove( data )
+                del node_to_data[ node ]
+                del data_to_node[ data ]
 
-            # Keep track of the elimination order
-            order.append( node )
+                # Keep track of the elimination order
+                order.append( node )
+            else:
+                node = order.pop( 0 )
 
             # Find the neighbors and make the tuple of nodes in the elimination clique
             neighbors = tuple( sorted( list( induced_graph.neighbors( node ) ) ) )
@@ -362,9 +371,10 @@ class MarkovNetwork( nx.Graph ):
             induced_graph.remove_nodes_from( [ node ] )
             induced_graph.add_edges_from( Clique.edges_for( neighbors ) )
 
-            # Re-calculate the fill in weights for each of the neighbors
-            for neighbor in neighbors:
-                update_elimination_queue( elimination_queue, induced_graph, neighbor, node_to_data, data_to_node )
+            if( should_find_order ):
+                # Re-calculate the fill in weights for each of the neighbors
+                for neighbor in neighbors:
+                    update_elimination_queue( elimination_queue, induced_graph, neighbor, node_to_data, data_to_node )
 
         if( return_maximal_cliques ):
             return order, factor_instructions, maximal_cliques
@@ -402,47 +412,3 @@ class MarkovNetwork( nx.Graph ):
 
         # Finally, find a maximal spanning tree for the cluster graph
         return JunctionTree( nx.maximum_spanning_tree( cluster_graph ) )
-
-    def set_clique_potentials( self, potential_map ):
-        """ Set the clique potentials for all of the nodes.  Will only go over the max cliques because any
-            other clique can be found by marginalizing irrelevant values from the maximal cliques.
-
-        Args:
-            potential_map - A dictionary of { max_clique: function } where function( node ) returns the potential
-
-        Returns:
-            None
-        """
-        for max_clique, potential_func in potential_map.items():
-            assert isinstance( max_clique, Clique )
-            self.potentials[max_clique] = potential_func
-
-    def get_clique_potential( self, nodes, is_maximal_clique=False ):
-        """ Get the clique potentials for any node.  Will find all of the maximal cliques
-            that the nodes are a part of.  Assumes that the nodes parameter is passed in
-            responsibly so that the find_cliques function doesn't run forever
-
-        Args:
-            nodes             - A list of nodes that we want the potentials for
-            is_maximal_clique - If the nodes passed in are known to be a maximal clique
-
-        Returns:
-            potential - The first potential that all nodes in nodes are a part of
-        """
-
-        if( not is_maximal_clique ):
-
-            # Find the induced subgraph
-            induced_subgraph = self.subgraph( nodes )
-
-            # Find all of the maximal cliques in subgraph.
-            max_clique = None
-            for clique in nx.find_cliques( induced_graph ):
-                if( sum( [ node in clique for node in nodes ] ) == 1 ):
-                    max_clique = Clique( clique )
-                    break
-        else:
-            max_clique = Clique( nodes )
-
-        # Find the correct potential
-        return self.potentials[max_clique]

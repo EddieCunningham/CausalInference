@@ -58,7 +58,7 @@ def junction_tree_conversion_test():
 
 def junction_tree_inference_test():
     # graph = DiscreteNetwork( nx.karate_club_graph() )
-    graph = DiscreteNetwork( nx.generators.balanced_tree( 4, 4 ) )
+    graph = DiscreteNetwork( nx.generators.balanced_tree( 2, 2 ) )
 
     # graph = DiscreteNetwork( nx.karate_club_graph() )
     # graph = DiscreteNetwork( nx.circular_ladder_graph( 7 ) )
@@ -108,11 +108,109 @@ def junction_tree_inference_test():
     print( 'Total computation time', time.time() - comp_start )
     print( 'Total time', time.time() - start )
 
+def junction_tree_best_inference_test():
+    graph = DiscreteNetwork( nx.karate_club_graph() )
+    # graph = DiscreteNetwork( nx.generators.balanced_tree( 2, 2 ) )
+
+    # graph = DiscreteNetwork( nx.karate_club_graph() )
+    # graph = DiscreteNetwork( nx.circular_ladder_graph( 7 ) )
+    # graph.remove_nodes_from( [ 0, 5 ] )
+    graph.draw()
+    print( 'Number of nodes', len( list( graph.nodes ) ) )
+    print( 'Number of edges', len( list( graph.edges ) ) )
+
+    # Set the state sizes
+    state_sizes = dict( [ ( node, 2 ) for node in graph.nodes ] )
+    # state_sizes = dict( [ ( node, np.random.randint( 3, 8 ) ) for node in graph.nodes ] )
+    graph.set_state_sizes( state_sizes )
+
+    # Set the clique potentials
+    # DON'T USE A BIG GRAPH!!!! THIS IS JUST FOR TESTING
+    max_cliques = [ tuple( sorted( x ) ) for x in nx.find_cliques( graph )  ]
+    clique_sizes = [ tuple( [ state_sizes[node] for node in max_clique ] ) for max_clique in max_cliques ]
+    potentials = dict( [ ( max_clique, np.random.random( clique_size ) ) for max_clique, clique_size in zip( max_cliques, clique_sizes ) ] )
+    graph.set_potentials( potentials )
+
+    ######################################################
+
+    order, lowest_complexity = graph.find_best_elimination_order( n_iters=1 )
+    print( 'lowest_complexity', lowest_complexity )
+    instructions = graph.get_computation_instructions( order )
+
+    comp_start = time.time()
+    for _ in range( 10 ):
+
+        graph.perform_message_passing( *instructions )
+
+    print( 'Total computation time', time.time() - comp_start )
+
+def evidence_test():
+    graph = DiscreteNetwork( nx.karate_club_graph() )
+    # graph = DiscreteNetwork( nx.generators.balanced_tree( 2, 2 ) )
+
+    # graph = DiscreteNetwork( nx.karate_club_graph() )
+    # graph = DiscreteNetwork( nx.circular_ladder_graph( 7 ) )
+    # graph.remove_nodes_from( [ 0, 5 ] )
+    graph.draw()
+    print( 'Number of nodes', len( list( graph.nodes ) ) )
+    print( 'Number of edges', len( list( graph.edges ) ) )
+
+    # Set the state sizes
+    # state_sizes = dict( [ ( node, 2 ) for node in graph.nodes ] )
+    state_sizes = dict( [ ( node, np.random.randint( 3, 8 ) ) for node in graph.nodes ] )
+    graph.set_state_sizes( state_sizes )
+
+    # Set the clique potentials
+    # DON'T USE A BIG GRAPH!!!! THIS IS JUST FOR TESTING
+    max_cliques = [ tuple( sorted( x ) ) for x in nx.find_cliques( graph )  ]
+    clique_sizes = [ tuple( [ state_sizes[node] for node in max_clique ] ) for max_clique in max_cliques ]
+    potentials = dict( [ ( max_clique, np.random.random( clique_size ) ) for max_clique, clique_size in zip( max_cliques, clique_sizes ) ] )
+    graph.set_potentials( potentials )
+
+    ######################################################
+
+    # Add evidence
+    nodes_with_evidence = []
+    data = []
+    for node in graph.nodes:
+        if( node != 0 ):
+            continue
+        # if( 0.4 > np.random.random() ):
+            # continue
+
+        n_observations = np.random.choice( 2, 1 )[0]
+        evidence = []
+        for _ in range( n_observations ):
+            p = np.arange( state_sizes[node] )**2
+            p = p / p.sum()
+            n_possible_states = np.random.choice( state_sizes[node], 1, p=p )[0]
+            possible_states   = np.random.choice( state_sizes[node], n_possible_states, replace=False )
+            evidence.append( possible_states )
+
+        print( 'node', node )
+        print( 'evidence', evidence )
+
+        nodes_with_evidence.append( node )
+        data.append( evidence )
+
+
+    graph.add_evidence( nodes_with_evidence, data )
+
+    ######################################################
+
+    order, lowest_complexity = graph.find_best_elimination_order( n_iters=1 )
+    print( 'lowest_complexity', lowest_complexity )
+
+    instructions = graph.get_computation_instructions( order )
+    graph.perform_message_passing( *instructions )
+
 def allMarkovNetworkTests():
     # test_to_bayesian_network()
     # sparse_graph_test()
     # message_passing_test()
     # junction_tree_test()
     # junction_tree_conversion_test()
-    junction_tree_inference_test()
+    # junction_tree_inference_test()
+    # junction_tree_best_inference_test()
+    evidence_test()
     print( 'Completed all markov network tests' )
