@@ -72,8 +72,7 @@ class DiscreteNetwork( MarkovNetwork ):
         Args:
             nodes - A list of nodes
             data  - A list of data for each node.  This should be all of the evidence
-                    observed for this node.  There can be multiple possible states
-                    for each observation
+                    observed for this node.
 
         Returns:
             None
@@ -84,11 +83,9 @@ class DiscreteNetwork( MarkovNetwork ):
             data = [ data ]
         assert len( nodes ) == len( data )
 
-        # This must be a 2d array with dims ( observation, possible states )
-        for possible_states_over_all_observations in data:
-            assert isinstance( possible_states_over_all_observations, Iterable )
-            for possible_states in possible_states_over_all_observations:
-                assert isinstance( possible_states, Iterable )
+        # Make sure possible states is an array
+        for possible_states in data:
+            assert isinstance( possible_states, Iterable )
 
         # Reset the evidence potentials
         for node in nodes:
@@ -96,9 +93,9 @@ class DiscreteNetwork( MarkovNetwork ):
                 if( node in clique ):
                     self.evidence_potentials[clique] = np.zeros( self.evidence_potentials[clique].shape )
 
-        # Accumulate the total evidence
-        for node, possible_states_over_all_observations in zip( nodes, data ):
-            assert isinstance( possible_states_over_all_observations, Iterable )
+        # Find the impossible indices for each clique
+        clique_impossible_indices = {}
+        for node, possible_states in zip( nodes, data ):
 
             # Find the potentials that node is a part of
             for clique, value in self.potentials.items():
@@ -109,18 +106,26 @@ class DiscreteNetwork( MarkovNetwork ):
                     state_size = self.state_sizes[node]
 
                     # For every observation, update the evidence
-                    for possible_states in possible_states_over_all_observations:
-                        impossible_states = np.setdiff1d( np.arange( state_size ), possible_states )
+                    impossible_states = np.setdiff1d( np.arange( state_size ), possible_states )
 
-                        # Create an indexer to select all of the impossible states
-                        impossible_indices = [ slice( 0, size ) if i != axis else impossible_states for i, size in enumerate( self.potentials[clique].shape ) ]
+                    # Create an indexer to select all of the impossible states
+                    impossible_indices = [ slice( 0, size ) if i != axis else impossible_states for i, size in enumerate( self.potentials[clique].shape ) ]
 
-                        # Create the zero'd out potential
-                        potential = self.potentials[clique].copy()
-                        potential[impossible_indices] = np.NINF
+                    if( clique not in clique_impossible_indices ):
+                        clique_impossible_indices[clique] = []
 
-                        # Update the evidence potential
-                        self.evidence_potentials[clique] += potential
+                    clique_impossible_indices[clique].append( impossible_indices )
+
+        # Update the evidence potentials
+        for clique, all_impossible_indices in clique_impossible_indices.items():
+
+            # Create the zero'd out potential
+            potential = self.potentials[clique].copy()
+            for impossible_indices in all_impossible_indices:
+                potential[impossible_indices] = np.NINF
+
+            # Update the evidence potential
+            self.evidence_potentials[clique] = potential
 
     def parse_max_clique_potential_instructions( self, max_clique_potential_instructions, target_max_cliques ):
         """ Assign actual computations to the instructions

@@ -178,21 +178,16 @@ def evidence_test():
         # if( 0.4 > np.random.random() ):
             # continue
 
-        n_observations = np.random.choice( 2, 1 )[0]
-        evidence = []
-        for _ in range( n_observations ):
-            p = np.arange( state_sizes[node] )**2
-            p = p / p.sum()
-            n_possible_states = np.random.choice( state_sizes[node], 1, p=p )[0]
-            possible_states   = np.random.choice( state_sizes[node], n_possible_states, replace=False )
-            evidence.append( possible_states )
+        p = np.arange( state_sizes[node] )**2
+        p = p / p.sum()
+        n_possible_states = np.random.choice( state_sizes[node], 1, p=p )[0]
+        possible_states   = np.random.choice( state_sizes[node], n_possible_states, replace=False )
 
         print( 'node', node )
-        print( 'evidence', evidence )
+        print( 'possible_states', possible_states )
 
         nodes_with_evidence.append( node )
-        data.append( evidence )
-
+        data.append( possible_states )
 
     graph.add_evidence( nodes_with_evidence, data )
 
