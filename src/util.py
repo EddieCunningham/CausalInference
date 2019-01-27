@@ -2,10 +2,129 @@ import numpy as np
 from scipy.special import logsumexp
 from opt_einsum import contract_path
 from collections import deque
+import itertools
+import yaml
+from timeit import default_timer as timer
 
 __all__ = [ 'log_einsum', 'log_einsum_path' ]
 
-# def log_einsum_path( contract, *shapes ):
+################################################################################################################
+
+def real_product( x, y ):
+    return x * y
+
+def real_integrate( x, axis ):
+    return np.sum( x, axis=axis )
+
+def log_product( x, y ):
+    return x + y
+
+def log_integrate( x, axis ):
+    return logsumexp( x, axis=axis )
+
+################################################################################################################
+
+class DeviceProfiler():
+
+    total_complexity = 0
+
+    def __init__( self, device_name ):
+
+        if( device_name is None ):
+            device_name = 'macbook.yaml'
+
+        self.device_name = device_name
+        self.device_path = './host/device_profiles/%s'%( device_name )
+        if( self.device_path.endswith( '.yaml' ) == False ):
+            self.device_path = self.device_path + '.yaml'
+
+        if( os.path.exists( self.device_path ) ):
+            with open( self.device_path, 'w' ) as yaml_file:
+                yaml_data = yaml.load( yaml_file )
+                self.m = yaml_data['coefficients']
+        else:
+            self.m = None
+
+    def reset( self ):
+        DeviceProfiler.total_complexity = 0
+
+    def log_product( self, x, y ):
+        DeviceProfiler.total_complexity += 0
+        return log_product( x, y )
+
+    def log_integrate( self, x, axis ):
+        assert x.ndim == 2
+        for i, ax in enumerate( axis ):
+            DeviceProfiler.total_complexity += self.polyval2d( x.shape[0] - i, x.shape[ax] )
+        return log_integrate( x, axis )
+
+    def polyfit2d( self, x, y, z, order=3 ):
+        ncols = ( order + 1 )**2
+        G = np.zeros( ( x.size, ncols ) )
+        ij = itertools.product( range( order+1 ), range( order+1 ) )
+        for k, ( i,j ) in enumerate( ij ):
+            G[:,k] = x**i * y**j
+        m, _, _, _ = np.linalg.lstsq( G, z )
+        return m
+
+    def polyval2d( self, x, y ):
+        order = int( np.sqrt( len( self.m ) ) ) - 1
+        ij = itertools.product( range( order+1 ), range( order+1 ) )
+        z = np.zeros_like( x )
+        for a, ( i,j ) in zip( self.m, ij ):
+            z += a * x**i * y**j
+        return z
+
+    def profile( self ):
+        # Taken from here https://stackoverflow.com/a/7997925
+
+        # Addition is basically instant, so only look at logsumexp
+        non_integrate_dims = np.linspace( 10, 10000, 10 )
+        integrate_dims     = np.linspace( 10, 10000, 10 )
+
+        # See how long it takes to logsumexp different sized arrays
+        integration_times = np.zeros( ( 10 * 10, 3 ) )
+        for i, ( non_int_dim, int_dim ) in enumerate( itertools.product( non_integrate_dims, integrate_dims ) ):
+            x = np.random.random( ( non_int_dim, int_dim ) )
+
+            times = np.zeros( 3 )
+            for i in range( 3 ):
+                start = timer()
+                log_integrate( x, axis=1 )
+                times[i] = timer() - start
+
+            integration_times[i] = np.array( [ non_int_dim, int_dim, np.mean( times ) ] )
+
+        # Do a polynomial fit
+        m = self.polyfit2d( integration_times[:, 0], integration_times[:, 1], integration_times[:, 2] )
+
+        # Save off the coefficients
+        yaml_data = { 'device_name': self.device_name, 'coefficients': m }
+        with open( self.device_path, 'w' ) as yaml_file:
+            yaml.dump( yaml_data, yaml_file )
+
+        import matplotlib.pyplot as plt
+        plt.switch_backend( 'agg' )
+
+        x = integration_times[:, 0]
+        y = integration_times[:, 1]
+        z = integration_times[:, 2]
+
+        # Evaluate it on a grid...
+        nx, ny = 20, 20
+        xx, yy = np.meshgrid( np.linspace(x.min(), x.max(), nx ),
+                              np.linspace(y.min(), y.max(), ny ) )
+        zz = polyval2d( xx, yy, m )
+
+        # Plot
+        plt.imshow( zz, extent=( x.min(), y.max(), x.max(), y.min() ) )
+        plt.scatter( x, y, c=z )
+
+        plt.savefig( './host/integration_plot.png' )
+
+
+################################################################################################################
+
 def log_einsum_path( contract, *args ):
     """ Return the contraction list for args that have the given shapes
         Also returns the shape of the output
@@ -33,7 +152,9 @@ def log_einsum_path( contract, *args ):
     output_shape = tuple( [ letter_sizes[unique_letters.index( letter ) ] for letter in result ] )
     return np.empty( output_shape ), contraction_list
 
-def log_einsum( contract, *args, contraction_list=None, _test=False ):
+################################################################################################################
+
+def log_einsum( contract, *args, contraction_list=None, _test=False, _profile=False, device_name=None ):
     """ Taken from here https://github.com/dgasmith/opt_einsum/blob/master/opt_einsum/contract.py
         but instead of ( multiply, sum ), will do ( sum, logsumexp ).  So this is just einsum in log space.
 
@@ -46,20 +167,29 @@ def log_einsum( contract, *args, contraction_list=None, _test=False ):
         Returns:
             The result of the contraction
     """
-
-    # This so that it is easy to test this function by comparing against np.einsum
-    if( _test == True ):
+    if( _profile == True ):
+        # If we want to profile the code, this will count how expensive
+        # it is to evaluate a computation
+        device_profiler = DeviceProfiler( device_name )
         def product( x, y ):
-            return x * y
+            return device_profiler.log_product( x, y )
 
         def integrate( x, axis ):
-            return np.sum( x, axis=axis )
+            return device_profiler.log_integrate( x, axis )
     else:
-        def product( x, y ):
-            return x + y
+        # Make it easy to test against a correct einsum implementation
+        if( _test == True ):
+            def product( x, y ):
+                return real_product( x, y )
 
-        def integrate( x, axis ):
-            return logsumexp( x, axis=axis )
+            def integrate( x, axis ):
+                return real_integrate( x, axis )
+        else:
+            def product( x, y ):
+                return log_product( x, y )
+
+            def integrate( x, axis ):
+                return log_integrate( x, axis )
 
     # If we haven't passed in the contraction list, find it
     if( contraction_list is None ):
@@ -136,10 +266,17 @@ def log_einsum( contract, *args, contraction_list=None, _test=False ):
 
     return operands[0]
 
-if( __name__ == '__main__' ):
+################################################################################################################
+
+def test_einsum():
     I = np.random.rand( 1, 10, 10, 10, 10 )
     C = np.random.rand( 1, 10, 10 )
     operands, contraction_list = contract_path( 'tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C, einsum_call=True )
 
     ans = log_einsum('tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C, _test=True)
     print( ( np.sin( ans )**2 ).sum() - ( np.sin(np.einsum('tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C ) )**2 ).sum() )
+
+################################################################################################################
+
+if( __name__ == '__main__' ):
+    test_einsum()
