@@ -431,7 +431,7 @@ class DiscreteNetwork( MarkovNetwork ):
                 best_order = order
                 fastest_time = elapsed_time
 
-            print( elapsed_time )
+        self.best_elimination_order = order
 
         return order, fastest_time
 

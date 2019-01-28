@@ -238,6 +238,16 @@ class MarkovNetwork( nx.Graph ):
         """
         return Clique( nodes )
 
+    @property
+    def best_elimination_order( self ):
+        if( not hasattr( self, '_best_elimination_order' ) ):
+            self.best_elimination_order = None
+        return self._best_elimination_order
+
+    @best_elimination_order.setter
+    def best_elimination_order( self, value ):
+        self._best_elimination_order = value
+
     def variable_elimination( self,
                               clique_factorization=None,
                               order=None,

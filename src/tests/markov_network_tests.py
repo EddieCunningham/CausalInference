@@ -193,11 +193,13 @@ def evidence_test():
 
     ######################################################
 
-    order, fastest_time = graph.find_best_elimination_order( n_iters=100 )
+    order, fastest_time = graph.find_best_elimination_order( n_iters=1 )
     print( 'fastest_time', fastest_time )
 
     instructions = graph.get_computation_instructions( order )
     graph.perform_message_passing( *instructions )
+
+    nx.write_yaml( graph, './host/test.yaml' )
 
 def allMarkovNetworkTests():
     # test_to_bayesian_network()
