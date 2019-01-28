@@ -393,7 +393,7 @@ class MarkovNetwork( nx.Graph ):
 
     def junction_tree( self, triangulated_graph_maximal_cliques ):
         """ Construct a junction tree using the maximal cliques of a triangulated graph.
-            Call this after getting the maximal cliques from variable elimination
+            Call this after getting the maximal cliques from variable elimination.
 
         Args:
             triangulated_graph_maximal_cliques - The max cliques of a triangulated graph
@@ -407,6 +407,8 @@ class MarkovNetwork( nx.Graph ):
         # (https://youtu.be/TddbmU9dHgA?t=4544)
         cluster_graph = MarkovNetwork()
 
+        # THIS IS EXTREMELY SLOW!!!!!!! CAN PROBABLY GET THIS FROM WITHIN THE VARIABLE ELIMINATION
+        # FUNCTION!!!!!!
         for i, max_clique1 in enumerate( triangulated_graph_maximal_cliques ):
             for j, max_clique2 in enumerate( triangulated_graph_maximal_cliques ):
                 if( i == j ):
@@ -417,8 +419,6 @@ class MarkovNetwork( nx.Graph ):
                 # A cluster graph has edges when the clusters have intersection
                 if( len( intersection ) > 0 ):
                     cluster_graph.add_edge( max_clique1, max_clique2, weight=len( intersection ) )
-
-        cluster_graph.draw( output_name='cluster_graph' )
 
         # Finally, find a maximal spanning tree for the cluster graph
         return JunctionTree( nx.maximum_spanning_tree( cluster_graph ) )

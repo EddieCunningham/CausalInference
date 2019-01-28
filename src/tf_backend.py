@@ -5,8 +5,9 @@ from collections import deque
 import itertools
 import yaml
 from timeit import default_timer as timer
+import tensorflow as tf
 
-__all__ = [ 'log_einsum', 'log_einsum_path' ]
+__all__ = [ 'log_einsum_tf' ]
 
 ################################################################################################################
 
@@ -14,46 +15,17 @@ def real_product( x, y ):
     return x * y
 
 def real_integrate( x, axis ):
-    return np.sum( x, axis=axis )
+    return tf.reduce_sum( x, axis=axis )
 
 def log_product( x, y ):
     return x + y
 
 def log_integrate( x, axis ):
-    return logsumexp( x, axis=axis )
+    return tf.reduce_logsumexp( x, axis=axis )
 
 ################################################################################################################
 
-def log_einsum_path( contract, *args ):
-    """ Return the contraction list for args that have the given shapes
-        Also returns the shape of the output
-
-        Args:
-            contract         - The contraction to perform
-            shapes           - The shapes of the tensors to contract
-
-        Returns:
-            The shape of the result and the contraction order
-    """
-    # contract_path requires a numpy array
-    shapes = [ arg.shape for arg in args ]
-    # args = [ np.empty( shape ) for shape in shapes ]
-    _, contraction_list = contract_path( contract, *args, einsum_call=True, optimize='auto' )
-
-    # Compute the output shape
-    unique_letters = ''.join( sorted( set( contract ) ) ).replace( ',', '' )
-    input_str, result = contract.split( '->' )
-    letter_sizes = [ 0 for _ in unique_letters ]
-    for operand, shape in zip( input_str.split( ',' ), shapes ):
-        for letter, size in zip( operand, shape ):
-            letter_sizes[unique_letters.index( letter )] = size
-
-    output_shape = tuple( [ letter_sizes[unique_letters.index( letter ) ] for letter in result ] )
-    return np.empty( output_shape ), contraction_list
-
-################################################################################################################
-
-def log_einsum( contract, *args, contraction_list=None, _test=False ):
+def log_einsum_tf( contract, *args, contraction_list=None, _test=False ):
     """ Taken from here https://github.com/dgasmith/opt_einsum/blob/master/opt_einsum/contract.py
         but instead of ( multiply, sum ), will do ( sum, logsumexp ).  So this is just einsum in log space.
 
@@ -116,8 +88,12 @@ def log_einsum( contract, *args, contraction_list=None, _test=False ):
             # Extend the axes of the operands and transpose them
             shape_left  = list( left_operand.shape )  + [ 1 for _ in range( len( left_operand.shape ), n_unique_letters ) ]
             shape_right = list( right_operand.shape ) + [ 1 for _ in range( len( right_operand.shape ), n_unique_letters ) ]
-            reshaped_left  = left_operand.reshape( tuple( shape_left ) ).transpose( transpose_left )
-            reshaped_right = right_operand.reshape( tuple( shape_right ) ).transpose( transpose_right )
+
+            reshaped_left_no_transpose = tf.reshape( left_operand, tuple( shape_left ) )
+            reshaped_right_no_transpose = tf.reshape( right_operand, tuple( shape_right ) )
+
+            reshaped_left  = tf.transpose( reshaped_left_no_transpose, transpose_left )
+            reshaped_right = tf.transpose( reshaped_right_no_transpose, transpose_right )
 
             # Sum up the terms
             summed = product( reshaped_left, reshaped_right )
@@ -128,7 +104,7 @@ def log_einsum( contract, *args, contraction_list=None, _test=False ):
             for i, letter in enumerate( full_results_index ):
                 transpose_back[i] = unique_letters.index( letter )
 
-            swapped_summed = summed.transpose( tuple( transpose_back ) )
+            swapped_summed = tf.transpose( summed, tuple( transpose_back ) )
 
             # Integrate out terms if needed
             if( len( idx_rm ) > 0 ):
@@ -137,7 +113,7 @@ def log_einsum( contract, *args, contraction_list=None, _test=False ):
             else:
                 # Don't squeeze the first dim!  This messes things up if we have a batch size of 1!
                 trailing_ones = tuple( [ i for i, s in enumerate( swapped_summed.shape ) if s == 1 and i > 0 ] )
-                new_view = swapped_summed.squeeze( axis=trailing_ones )
+                new_view = tf.squeeze( swapped_summed, axis=trailing_ones )
 
         else:
 
@@ -150,22 +126,24 @@ def log_einsum( contract, *args, contraction_list=None, _test=False ):
         del tmp_operands, new_view
 
     if( _test == True ):
-        check = np.einsum( contract, *args )
-        assert np.allclose( check, operands[0] )
+        check = tf.einsum( contract, *args )
+        diff = operands[0]**2 - check**2
+        assert np.isclose( tf.reduce_sum( diff ).numpy(), 0.0, atol=1e-6 )
 
     return operands[0]
 
 ################################################################################################################
 
 def test_einsum():
-    I = np.random.rand( 1, 10, 10, 10, 10 )
-    C = np.random.rand( 1, 10, 10 )
-    operands, contraction_list = contract_path( 'tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C, einsum_call=True )
+    I = tf.constant( np.random.rand( 1, 10, 10, 10, 10 ) )
+    C = tf.constant( np.random.rand( 1, 10, 10 ) )
 
-    ans = log_einsum('tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C, _test=True)
-    print( ( np.sin( ans )**2 ).sum() - ( np.sin(np.einsum('tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C ) )**2 ).sum() )
+    ans = log_einsum_tf('tea,tfb,tabcd,tgc,thd->tefgh', C, C, I, C, C, _test=True)
+    print( 'Passed!' )
 
 ################################################################################################################
 
 if( __name__ == '__main__' ):
+    from host.debug import *
+    tf.enable_eager_execution()
     test_einsum()

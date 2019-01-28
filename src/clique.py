@@ -2,6 +2,7 @@ import networkx as nx
 from networkx.algorithms import approximation
 import itertools
 import numpy as np
+from collections import OrderedDict
 
 __all__ = [ 'Clique', 'DiscreteClique' ]
 
@@ -20,8 +21,10 @@ class Clique():
             None
         """
         self.nodes  = sorted( nodes, key=lambda x: hash( x ) )
-        self.hashes = np.array( [ hash( node ) for node in self.nodes ] )
-        self.hash   = hash( tuple( self.hashes ) )
+        self.hash_map = dict( [ ( hash( node ), i ) for i, node in enumerate( self.nodes ) ] )
+        self.hash_keys = set( [ hash( node ) for node in self.nodes ] )
+        # self.hashes = np.array( [ hash( node ) for node in self.nodes ] )
+        self.hash   = hash( tuple( self.nodes ) )
         self.computation_type = computation_type
         self.potential = None
 
@@ -57,8 +60,7 @@ class Clique():
             Whether or not this clique is contained in other_clique
         """
         assert isinstance( other_clique, Clique )
-        # Can optimize this later
-        return set( self.hashes ).issubset( other_clique.hashes )
+        return self.hash_keys.issubset( other_clique.hash_keys )
 
     def intersection( self, other_clique ):
         """ Check if this node shared nodes with other_clique
@@ -70,8 +72,9 @@ class Clique():
             Whether or not the cliques share nodes
         """
         assert isinstance( other_clique, Clique )
-        intersection_indices = np.in1d( self.hashes, other_clique.hashes )
-        return [ self.nodes[i] for i, val in enumerate( intersection_indices ) if val == True ]
+
+        intersection = self.hash_keys.intersection( other_clique.hash_keys )
+        return [ self.nodes[self.hash_map[h]] for h in intersection ]
 
     def difference( self, other_clique ):
         """ The nodes in this clique that are not in other_clique
@@ -83,8 +86,9 @@ class Clique():
             The nodes in this clique that are not in other_clique
         """
         assert isinstance( other_clique, Clique )
-        difference_indices = ~np.in1d( self.hashes, other_clique.hashes )
-        return [ self.nodes[i] for i, val in enumerate( difference_indices ) if val == True ]
+
+        difference = self.hash_keys.difference( other_clique.hash_keys )
+        return [ self.nodes[self.hash_map[h]] for h in difference ]
 
     @staticmethod
     def edges_for( nodes ):

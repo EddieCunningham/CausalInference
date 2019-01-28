@@ -6,8 +6,10 @@ from host.src.clique import DiscreteClique
 import string
 from functools import reduce
 from collections import namedtuple, Iterable
-from .util import log_einsum, log_einsum_path
+from .tf_backend import log_einsum_tf
+from .np_backend import log_einsum_np, log_einsum_path
 from timeit import default_timer as timer
+import tensorflow as tf
 
 class DiscreteNetwork( MarkovNetwork ):
 
@@ -23,6 +25,10 @@ class DiscreteNetwork( MarkovNetwork ):
     BatchedInstruction = namedtuple( 'BatchedInstruction', [ 'batch_contract', 'instruction' ] )
     MessageSize = namedtuple( 'MessageSize', [ 'nodes', 'state_sizes' ] )
 
+    @property
+    def backend( self ):
+        return 'tf'
+
     def set_potentials( self, potentials ):
         """ Set the clique potentials.  THESE MUST BE IN LOG SPACE
 
@@ -35,7 +41,8 @@ class DiscreteNetwork( MarkovNetwork ):
         assert isinstance( potentials, dict )
         for nodes, value in potentials.items():
             assert tuple( sorted( nodes ) ) == nodes
-            assert isinstance( value, np.ndarray )
+            if( self.backend == 'np' ):
+                assert isinstance( value, np.ndarray )
         self.potentials          = potentials
         self.evidence_potentials = potentials
 
@@ -110,7 +117,7 @@ class DiscreteNetwork( MarkovNetwork ):
                     impossible_states = np.setdiff1d( np.arange( state_size ), possible_states )
 
                     # Create an indexer to select all of the impossible states
-                    impossible_indices = [ slice( 0, size ) if i != axis else impossible_states for i, size in enumerate( self.potentials[clique].shape ) ]
+                    impossible_indices = tuple( [ slice( 0, size ) if i != axis else impossible_states for i, size in enumerate( self.potentials[clique].shape ) ] )
 
                     if( clique not in clique_impossible_indices ):
                         clique_impossible_indices[clique] = []
@@ -309,6 +316,55 @@ class DiscreteNetwork( MarkovNetwork ):
 
         return contraction_lists
 
+    def message_object_type( self, *args, **kwargs ):
+        """ Function to correctly create the message objects
+
+        Args:
+            None
+
+        Returns:
+            None
+        """
+        if( self.backend == 'tf' ):
+            return tf.Variable( *args, **kwargs )
+        elif( self.backend == 'np' ):
+            return np.array( *args, **kwargs )
+        else:
+            assert 0, 'Need to specify backend'
+
+
+    def stack_func( self, *args, **kwargs ):
+        """ Function that can let us batch message objects depending on the current backend
+
+        Args:
+            None
+
+        Returns:
+            None
+        """
+        if( self.backend == 'tf' ):
+            return tf.stack( *args, **kwargs )
+        elif( self.backend == 'np' ):
+            return np.array( *args, **kwargs )
+        else:
+            assert 0, 'Need to specify backend'
+
+    def log_einsum( self, *args, **kwargs ):
+        """ Function that can let us batch message objects depending on the current backend
+
+        Args:
+            None
+
+        Returns:
+            None
+        """
+        if( self.backend == 'tf' ):
+            return log_einsum_tf( *args, **kwargs )
+        elif( self.backend == 'np' ):
+            return log_einsum_np( *args, **kwargs )
+        else:
+            assert 0, 'Need to specify backend'
+
     def perform_message_passing( self,
                                  supernode_potential_instructions,
                                  messages,
@@ -340,24 +396,24 @@ class DiscreteNetwork( MarkovNetwork ):
                 new_contract, reduced_contract = contract.split( '->' )
                 expanded_contract = ''.join( sorted( list( set( new_contract ) ) ) ).replace( ',', '' )
                 new_contract += '->' + expanded_contract
-                potentials[all_nodes] = log_einsum( new_contract, *[ potentials[other_nodes] for other_nodes in other_potentials ], contraction_list=next( contraction_iter ) )
-                potentials[nodes] = log_einsum( expanded_contract + '->' + reduced_contract, potentials[all_nodes], contraction_list=next( contraction_iter ) )
+                potentials[all_nodes] = self.log_einsum( new_contract, *[ potentials[other_nodes] for other_nodes in other_potentials ], contraction_list=next( contraction_iter ) )
+                potentials[nodes] = self.log_einsum( expanded_contract + '->' + reduced_contract, potentials[all_nodes], contraction_list=next( contraction_iter ) )
             else:
-                potentials[nodes] = log_einsum( contract, *[ potentials[other_nodes] for other_nodes in other_potentials ], contraction_list=next( contraction_iter ) )
+                potentials[nodes] = self.log_einsum( contract, *[ potentials[other_nodes] for other_nodes in other_potentials ], contraction_list=next( contraction_iter ) )
 
         # Perform the inference computations
-        message_objects = dict( [ ( message, np.empty( s.state_sizes ) ) for message, s in messages.items() ] )
+        message_objects = dict( [ ( message, self.message_object_type( np.empty( s.state_sizes ) ) ) for message, s in messages.items() ] )
         for batched_contract, instructions in computation_instructions:
 
             # Find the potential objects
-            all_potentials = np.array( [ potentials[instruction.nodes_in_potential] for instruction in instructions ] )
+            all_potentials = self.stack_func( [ potentials[instruction.nodes_in_potential] for instruction in instructions ] )
 
             # Batch the incoming message objects
             incoming_message_batches = zip( *[ instruction.incoming_messages for instruction in instructions ] )
-            incoming_message_tensors = [ np.array( [ message_objects[message] for message in message_batch ] ) for message_batch in incoming_message_batches ]
+            incoming_message_tensors = [ self.stack_func( [ message_objects[message] for message in message_batch ] ) for message_batch in incoming_message_batches ]
 
             # Do the actual computation
-            message = log_einsum( batched_contract, all_potentials, *incoming_message_tensors, contraction_list=next( contraction_iter ) )
+            message = self.log_einsum( batched_contract, all_potentials, *incoming_message_tensors, contraction_list=next( contraction_iter ) )
 
             # Copy the results back to the appropriate message objects
             for i, instruction in enumerate( instructions ):
@@ -378,10 +434,10 @@ class DiscreteNetwork( MarkovNetwork ):
 
                 contract = ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) ] )
                 contract += '->' + ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) if _node == node ] )
-                marginals[node] = log_einsum( contract, data )
+                marginals[node] = self.log_einsum( contract, data )
 
                 contract = ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) ] ) + '->'
-                total = log_einsum( contract, data )
+                total = self.log_einsum( contract, data )
                 # print( node, total, marginals[node] - total )
 
         return marginals

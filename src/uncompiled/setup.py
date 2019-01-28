@@ -7,7 +7,7 @@ def defaultExtension( name ):
                       sources=[ '%s.pyx'%name ],
                       include_dirs=[ np.get_include(), '.' ],
                       library_dirs=[],
-                      extra_compile_args=[ '-fopenmp' ],
+                      extra_compile_args=[ '-fopenmp', '-std=c++11' ],
                       extra_link_args=[ '-fopenmp' ],
                       language='c++' )
 

@@ -145,8 +145,8 @@ def junction_tree_best_inference_test():
     print( 'Total computation time', time.time() - comp_start )
 
 def evidence_test():
-    graph = DiscreteNetwork( nx.karate_club_graph() )
-    # graph = DiscreteNetwork( nx.generators.balanced_tree( 2, 2 ) )
+    # graph = DiscreteNetwork( nx.karate_club_graph() )
+    graph = DiscreteNetwork( nx.generators.balanced_tree( 4, 4 ) )
 
     # graph = DiscreteNetwork( nx.karate_club_graph() )
     # graph = DiscreteNetwork( nx.circular_ladder_graph( 7 ) )
@@ -156,8 +156,8 @@ def evidence_test():
     print( 'Number of edges', len( list( graph.edges ) ) )
 
     # Set the state sizes
-    # state_sizes = dict( [ ( node, 2 ) for node in graph.nodes ] )
-    state_sizes = dict( [ ( node, np.random.randint( 3, 8 ) ) for node in graph.nodes ] )
+    state_sizes = dict( [ ( node, 2 ) for node in graph.nodes ] )
+    # state_sizes = dict( [ ( node, np.random.randint( 3, 8 ) ) for node in graph.nodes ] )
     graph.set_state_sizes( state_sizes )
 
     # Set the clique potentials
@@ -197,7 +197,14 @@ def evidence_test():
     print( 'fastest_time', fastest_time )
 
     instructions = graph.get_computation_instructions( order )
-    graph.perform_message_passing( *instructions )
+
+    comp_start = time.time()
+    for _ in range( 10 ):
+
+        graph.perform_message_passing( *instructions )
+
+    print( 'Total computation time', time.time() - comp_start )
+
 
     nx.write_yaml( graph, './host/test.yaml' )
 
