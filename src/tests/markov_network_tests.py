@@ -133,8 +133,8 @@ def junction_tree_best_inference_test():
 
     ######################################################
 
-    order, lowest_complexity = graph.find_best_elimination_order( n_iters=1 )
-    print( 'lowest_complexity', lowest_complexity )
+    order, fastest_time = graph.find_best_elimination_order( n_iters=1 )
+    print( 'fastest_time', fastest_time )
     instructions = graph.get_computation_instructions( order )
 
     comp_start = time.time()
@@ -193,8 +193,8 @@ def evidence_test():
 
     ######################################################
 
-    order, lowest_complexity = graph.find_best_elimination_order( n_iters=1 )
-    print( 'lowest_complexity', lowest_complexity )
+    order, fastest_time = graph.find_best_elimination_order( n_iters=100 )
+    print( 'fastest_time', fastest_time )
 
     instructions = graph.get_computation_instructions( order )
     graph.perform_message_passing( *instructions )

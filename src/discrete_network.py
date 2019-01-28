@@ -7,6 +7,7 @@ import string
 from functools import reduce
 from collections import namedtuple, Iterable
 from .util import log_einsum, log_einsum_path
+from timeit import default_timer as timer
 
 class DiscreteNetwork( MarkovNetwork ):
 
@@ -255,77 +256,6 @@ class DiscreteNetwork( MarkovNetwork ):
 
         return messages, computation_instructions
 
-    def evaluate_instruction_complexity( self,
-                                         supernode_potential_instructions,
-                                         messages,
-                                         computation_instructions,
-                                         gpu_support=True ):
-        """ Determing how fast it will be to do computations on the given instructions.
-
-        Args:
-            supernode_potential_instructions - How to get the supernode potentials
-            messages                         - Holds the nodes that the separator encapsulates and the state sizes for the nodes
-            computation_instructions         - Actually what to do
-            gpu_support                      - Whether or not we intend to do inference on a gpu
-
-        Returns:
-            A number that roughly represents the computational complexity
-        """
-        def contraction_complexity( contract, contraction_list ):
-            if( gpu_support == True ):
-                # Not using a huge dataset, so the computation its self on a gpu
-                # is probably going to be the same for each contraction regardless
-                # of the size
-                return len( contraction_list )
-
-            # Count the number of computations done.  This involves the state sizes
-            assert 0, 'Not implemented yet'
-
-        total_complexity = 0
-
-        # Build the clique potentials
-        potentials = dict( [ ( key, np.empty( potential.shape ) ) for key, potential in self.evidence_potentials.items() ] )
-
-        for node_to_eliminate, nodes, other_potentials, contract, keep in supernode_potential_instructions:
-
-            # Create the new factor
-            if( keep ):
-                all_nodes = tuple( sorted( [ node_to_eliminate ] + list( nodes ) ) )
-
-                # Create the full contration
-                new_contract, reduced_contract = contract.split( '->' )
-                expanded_contract = ''.join( sorted( list( set( new_contract ) ) ) ).replace( ',', '' )
-                new_contract += '->' + expanded_contract
-                new_contract_reduced = expanded_contract + '->' + reduced_contract
-
-                # Find the contractions
-                potentials[all_nodes], cont_list1 = log_einsum_path( new_contract, *[ potentials[other_nodes] for other_nodes in other_potentials ] )
-                potentials[nodes], cont_list2 = log_einsum_path( new_contract_reduced, potentials[all_nodes] )
-
-                # Update the total complexity
-                total_complexity += contraction_complexity( new_contract, cont_list1 )
-                total_complexity += contraction_complexity( new_contract_reduced, cont_list2 )
-            else:
-                potentials[nodes], cont_list = log_einsum_path( contract, *[ potentials[other_nodes] for other_nodes in other_potentials ] )
-                total_complexity += contraction_complexity( contract, cont_list )
-
-        # Perform the inference computations
-        message_objects = dict( [ ( message, np.empty( s.state_sizes ) ) for message, s in messages.items() ] )
-        for batched_contract, instructions in computation_instructions:
-
-            # Find the potential objects
-            all_potentials = np.array( [ potentials[instruction.nodes_in_potential] for instruction in instructions ] )
-
-            # Batch the incoming message objects
-            incoming_message_batches = zip( *[ instruction.incoming_messages for instruction in instructions ] )
-            incoming_message_tensors = [ np.array( [ message_objects[message] for message in message_batch ] ) for message_batch in incoming_message_batches ]
-
-            # Do the actual computation
-            _, cont_list = log_einsum_path( batched_contract, all_potentials, *incoming_message_tensors )
-            total_complexity += contraction_complexity( batched_contract, cont_list )
-
-        return total_complexity
-
     def generate_contractions( self,
                                supernode_potential_instructions,
                                messages,
@@ -452,23 +382,22 @@ class DiscreteNetwork( MarkovNetwork ):
 
                 contract = ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) ] ) + '->'
                 total = log_einsum( contract, data )
-                print( node, total, marginals[node] - total )
+                # print( node, total, marginals[node] - total )
 
         return marginals
 
-    def find_best_elimination_order( self, n_iters=100, gpu_support=True ):
+    def find_best_elimination_order( self, n_iters=100, runs_to_average=3 ):
         """ Find the elimination order that gives the most efficient computation instructions
 
         Args:
-            gpu_support - Whether or not we intend to do inference on a gpu
-            n_iters     - The number of iterations to perform
+            n_iters - The number of iterations to perform
 
         Returns:
             order - The best elimination order
         """
 
         best_order = None
-        lowest_complexity = 999999999999999999
+        fastest_time = 999999999999999999
 
         for _ in range( n_iters ):
 
@@ -485,14 +414,26 @@ class DiscreteNetwork( MarkovNetwork ):
             supernode_potential_instructions = self.parse_max_clique_potential_instructions( max_clique_potential_instructions, junction_tree.nodes )
             separators, computation_instructions = self.parse_inference_instructions( instructions )
 
-            # See how good this order is
-            instruction_complexity = self.evaluate_instruction_complexity( supernode_potential_instructions, separators, computation_instructions, gpu_support=gpu_support )
+            # Generate the einsum contractions
+            contraction_lists = self.generate_contractions( supernode_potential_instructions, separators, computation_instructions )
 
-            if( ( best_order is None ) or ( instruction_complexity < lowest_complexity ) ):
+            # Run message passing a few times and average the time taken
+            times = np.zeros( runs_to_average )
+            for i in range( runs_to_average ):
+                start = timer()
+                self.perform_message_passing( supernode_potential_instructions, separators, computation_instructions, contraction_lists )
+                end = timer()
+                times[i] = end - start
+
+            elapsed_time = np.mean( times )
+
+            if( ( best_order is None ) or ( elapsed_time < fastest_time ) ):
                 best_order = order
-                lowest_complexity = instruction_complexity
+                fastest_time = elapsed_time
 
-        return order, lowest_complexity
+            print( elapsed_time )
+
+        return order, fastest_time
 
     def get_computation_instructions( self, order=None ):
         """ Get the computation instructions for an elimination order
