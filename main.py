@@ -10,5 +10,5 @@ from host.src.tests.tensorflow_tests import *
 # allMessagePassingTests()
 # allTraversalTests()
 # allInferenceTests()
-# allMarkovNetworkTests()
-allTensorflowTests()
+allMarkovNetworkTests()
+# allTensorflowTests()

@@ -207,7 +207,7 @@ class RedBlackTree:
 
     def sample( self ):
         # Sample from the entire list
-        random_number = np.random.randint( self.total_value_in_tree )
+        random_number = np.random.randint( max( 1, self.total_value_in_tree ) )
         cum_sum = 0
         for data in reversed( self ):
             cum_sum = cum_sum + data

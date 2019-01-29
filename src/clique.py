@@ -63,7 +63,7 @@ class Clique():
         return self.hash_keys.issubset( other_clique.hash_keys )
 
     def intersection( self, other_clique ):
-        """ Check if this node shared nodes with other_clique
+        """ Nodes shared with other_clique
 
         Args:
             other_clique - The potential sepset of this clique
@@ -75,6 +75,20 @@ class Clique():
 
         intersection = self.hash_keys.intersection( other_clique.hash_keys )
         return [ self.nodes[self.hash_map[h]] for h in intersection ]
+
+    def union( self, other_clique ):
+        """ Nodes shared with other_clique
+
+        Args:
+            other_clique - The potential sepset of this clique
+
+        Returns:
+            Whether or not the cliques share nodes
+        """
+        assert isinstance( other_clique, Clique )
+
+        union = self.hash_keys.union( other_clique.hash_keys )
+        return [ self.nodes[self.hash_map[h]] if h in self.hash_map else other_clique.nodes[other_clique.hash_map[h]] for h in union ]
 
     def difference( self, other_clique ):
         """ The nodes in this clique that are not in other_clique

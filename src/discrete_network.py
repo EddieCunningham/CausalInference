@@ -27,7 +27,8 @@ class DiscreteNetwork( MarkovNetwork ):
 
     @property
     def backend( self ):
-        return 'tf'
+        return 'np'
+        # return 'tf'
 
     def set_potentials( self, potentials ):
         """ Set the clique potentials.  THESE MUST BE IN LOG SPACE
@@ -402,7 +403,7 @@ class DiscreteNetwork( MarkovNetwork ):
                 potentials[nodes] = self.log_einsum( contract, *[ potentials[other_nodes] for other_nodes in other_potentials ], contraction_list=next( contraction_iter ) )
 
         # Perform the inference computations
-        message_objects = dict( [ ( message, self.message_object_type( np.empty( s.state_sizes ) ) ) for message, s in messages.items() ] )
+        message_objects = dict( [ ( message, None ) for message, s in messages.items() ] )
         for batched_contract, instructions in computation_instructions:
 
             # Find the potential objects
@@ -438,7 +439,7 @@ class DiscreteNetwork( MarkovNetwork ):
 
                 contract = ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) ] ) + '->'
                 total = self.log_einsum( contract, data )
-                # print( node, total, marginals[node] - total )
+                print( node, total, marginals[node] - total )
 
         return marginals
 
@@ -457,13 +458,11 @@ class DiscreteNetwork( MarkovNetwork ):
 
         for _ in range( n_iters ):
 
-            # Run variable elimination
-            order, max_clique_potential_instructions, maximal_cliques = self.variable_elimination( clique_factorization=self.evidence_potentials,
-                                                                                                   return_maximal_cliques=True,
-                                                                                                   draw=False )
-
-            # Create the junction tree and the computation instructions
-            junction_tree = self.junction_tree( maximal_cliques )
+            # Run variable elimination, create the junction tree and get the message passing instructions
+            order, max_clique_potential_instructions, junction_tree = self.variable_elimination( clique_factorization=self.evidence_potentials,
+                                                                                                 return_maximal_cliques=True,
+                                                                                                 draw=False,
+                                                                                                 return_junction_tree=True )
             instructions = junction_tree.shafer_shenoy_inference_instructions()
 
             # Generate the instructions to do inference
@@ -506,14 +505,15 @@ class DiscreteNetwork( MarkovNetwork ):
             contraction_lists                - The contractions for each log_einsum call in computation_instructions
         """
         # Run variable elimination
-        _, max_clique_potential_instructions, maximal_cliques = self.variable_elimination( clique_factorization=self.evidence_potentials,
-                                                                                           order=order,
-                                                                                           return_maximal_cliques=True,
-                                                                                           draw=False )
-
+        _, max_clique_potential_instructions, junction_tree = self.variable_elimination( clique_factorization=self.evidence_potentials,
+                                                                                         order=order,
+                                                                                         return_maximal_cliques=True,
+                                                                                         draw=False,
+                                                                                         return_junction_tree=True )
         # Create the junction tree and the computation instructions
-        junction_tree = self.junction_tree( maximal_cliques )
         instructions = junction_tree.shafer_shenoy_inference_instructions()
+
+        junction_tree.draw( output_name='junction_tree' )
 
         # Generate the instructions to do inference
         supernode_potential_instructions = self.parse_max_clique_potential_instructions( max_clique_potential_instructions, junction_tree.nodes )

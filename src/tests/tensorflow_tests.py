@@ -58,9 +58,10 @@ def allTensorflowTests():
     import cProfile, pstats, io
     pr = cProfile.Profile()
     pr.enable()
+
     ######################################################
 
-    graph = DiscreteNetwork( nx.generators.balanced_tree( 5, 5 ) )
+    graph = DiscreteNetwork( nx.generators.balanced_tree( 3, 3 ) )
     state_sizes = dict( [ ( node, 2 ) for node in graph.nodes ] )
     graph.set_state_sizes( state_sizes )
 
@@ -73,8 +74,8 @@ def allTensorflowTests():
     print( 'Starting to find best elimination order' )
     order, fastest_time = graph.find_best_elimination_order( n_iters=1 )
     print( 'fastest_time', fastest_time )
-    ######################################################
 
+    ######################################################
 
     pr.disable()
     s = io.StringIO()

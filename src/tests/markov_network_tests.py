@@ -83,12 +83,12 @@ def junction_tree_inference_test():
     start = time.time()
 
     # Run variable elimination
-    order, max_clique_potential_instructions, maximal_cliques = graph.variable_elimination( potentials,
-                                                                                            return_maximal_cliques=True,
-                                                                                            draw=False )
+    order, max_clique_potential_instructions, junction_tree = graph.variable_elimination( potentials,
+                                                                                          return_maximal_cliques=True,
+                                                                                          draw=False,
+                                                                                          return_junction_tree=True )
 
     # Create the junction tree and the computation instructions
-    junction_tree = graph.junction_tree( maximal_cliques )
     junction_tree.draw()
     instructions = junction_tree.shafer_shenoy_inference_instructions()
 
@@ -146,11 +146,11 @@ def junction_tree_best_inference_test():
 
 def evidence_test():
     # graph = DiscreteNetwork( nx.karate_club_graph() )
-    graph = DiscreteNetwork( nx.generators.balanced_tree( 4, 4 ) )
+    # graph = DiscreteNetwork( nx.generators.balanced_tree( 3, 3 ) )
 
     # graph = DiscreteNetwork( nx.karate_club_graph() )
-    # graph = DiscreteNetwork( nx.circular_ladder_graph( 7 ) )
-    # graph.remove_nodes_from( [ 0, 5 ] )
+    graph = DiscreteNetwork( nx.circular_ladder_graph( 7 ) )
+    graph.remove_nodes_from( [ 0, 5 ] )
     graph.draw()
     print( 'Number of nodes', len( list( graph.nodes ) ) )
     print( 'Number of edges', len( list( graph.edges ) ) )
@@ -199,14 +199,11 @@ def evidence_test():
     instructions = graph.get_computation_instructions( order )
 
     comp_start = time.time()
-    for _ in range( 10 ):
+    for _ in range( 0 ):
 
         graph.perform_message_passing( *instructions )
 
     print( 'Total computation time', time.time() - comp_start )
-
-
-    nx.write_yaml( graph, './host/test.yaml' )
 
 def allMarkovNetworkTests():
     # test_to_bayesian_network()

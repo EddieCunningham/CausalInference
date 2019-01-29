@@ -7,6 +7,7 @@ from host.src.clique import Clique
 from heapq import nsmallest
 from collections import namedtuple
 from .red_black_tree import RedBlackTree, NodeData
+from functools import reduce
 
 class MarkovNetwork( nx.Graph ):
 
@@ -231,12 +232,35 @@ class MarkovNetwork( nx.Graph ):
 
     def build_clique( self, nodes ):
         """ Build a clique over nodes.  Subclasses of MarkovNetwork should overload this
+
         Args:
             nodes - A list of nodes to build a clique over
         Returns:
             clique - The clique object
         """
         return Clique( nodes )
+
+    def find_adjacent_clusters( self, cluster_graph, cluster ):
+        """ Given a structure that holds info about a cluster graph, see if it
+            contains a node that is a superset of cluster
+
+        Args:
+            cluster_graph - A dictionary where the keys are nodes in the original graph
+                            and value is a set with the nodes of the cluster graph that
+                            contain node
+            cluster       - The new cluster that we want to see if there are nodes that
+                            are a superset of it
+        Returns:
+            If cluster is a subset of any cluster in cluster_graph, then return None.
+            Otherwise, return the set of nodes that cluster should have an edge with
+        """
+        superset_nodes = reduce( lambda x, y: x.intersection( y ), [ cluster_graph[node] for node in cluster.nodes ] )
+
+        if( len( superset_nodes ) != 0 ):
+            return None
+
+        # Return the nodes that should have an edge connected to cluster
+        return reduce( lambda x, y: x.union( y ), [ cluster_graph[node] for node in cluster.nodes ] )
 
     @property
     def best_elimination_order( self ):
@@ -255,7 +279,8 @@ class MarkovNetwork( nx.Graph ):
                               heuristic='min_fill_in',
                               top_choices=4,
                               selector='inverse_fill_in',
-                              draw=False ):
+                              draw=False,
+                              return_junction_tree=True ):
         """ Run variable elimination using a heuristic.
             Currently only implemented min_fill_in and top_choices=N.
             TODO:  Implement the other variable elimination options
@@ -306,7 +331,6 @@ class MarkovNetwork( nx.Graph ):
             elimination_queue.add( data )
 
         # Run the elimination algorithm to find the elimination cliques
-        maximal_cliques = []
         factor_instructions = []
         induced_graph = self.copy()
         should_find_order = order is None
@@ -320,6 +344,7 @@ class MarkovNetwork( nx.Graph ):
             for node in induced_graph.nodes:
                 update_elimination_queue( elimination_queue, induced_graph, node, node_to_data, data_to_node )
 
+        cluster_graph_nodes = dict( [ ( node, set() ) for node in self.nodes ] )
         factors = set()
         i = 0
         while( len( induced_graph.nodes ) > 0 ):
@@ -327,6 +352,7 @@ class MarkovNetwork( nx.Graph ):
             if( draw == True ):
                 induced_graph.draw( output_name='induced_graph_%d'%( i ) )
 
+            assert len( self.nodes ) - len( induced_graph.nodes ) == i
             i += 1
 
             # Find the next node to eliminate and remove node from the elimination queue
@@ -369,13 +395,12 @@ class MarkovNetwork( nx.Graph ):
             if( return_maximal_cliques ):
                 is_maximal_clique = True
                 elimination_clique = self.build_clique( elimination_nodes )
-                for max_clique in maximal_cliques:
-                    if( elimination_clique.is_subset( max_clique ) ):
-                        is_maximal_clique = False
-                        break
 
-                if( is_maximal_clique ):
-                    maximal_cliques.append( elimination_clique )
+                # Check if the elimination clique is not a subset of any existing maximal clique
+                adjacent_clusters = self.find_adjacent_clusters( cluster_graph_nodes, elimination_clique )
+                if( adjacent_clusters is not None ):
+                    for node_in_clique in elimination_clique.nodes:
+                        cluster_graph_nodes[node_in_clique].add( elimination_clique )
 
             # Remove the current node and add in the fill-in edges
             induced_graph.remove_nodes_from( [ node ] )
@@ -386,39 +411,26 @@ class MarkovNetwork( nx.Graph ):
                 for neighbor in neighbors:
                     update_elimination_queue( elimination_queue, induced_graph, neighbor, node_to_data, data_to_node )
 
-        if( return_maximal_cliques ):
-            return order, factor_instructions, maximal_cliques
+        if( return_junction_tree == True ):
+            from host.src.junction_tree import JunctionTree
+
+            # The weights of the cluster graph is the size of the intersection between nodes
+            edge_weights = {}
+            for node, clusters in cluster_graph_nodes.items():
+                for cluster1, cluster2 in itertools.combinations( clusters, 2 ):
+                    edge = tuple( sorted( [ cluster1, cluster2 ], key=lambda x: hash( x ) ) )
+                    if( edge not in edge_weights ):
+                        edge_weights[edge] = 0
+                    edge_weights[edge] += 1
+
+            # Create the cluster graph
+            cluster_graph = MarkovNetwork()
+            for ( cluster1, cluster2 ), weight in edge_weights.items():
+                cluster_graph.add_edge( cluster1, cluster2, weight=weight )
+
+            # Create a maxium spanning tree from the cluster graph
+            junction_tree = JunctionTree( nx.maximum_spanning_tree( cluster_graph ) )
+
+            return order, factor_instructions, junction_tree
 
         return order, factor_instructions
-
-    def junction_tree( self, triangulated_graph_maximal_cliques ):
-        """ Construct a junction tree using the maximal cliques of a triangulated graph.
-            Call this after getting the maximal cliques from variable elimination.
-
-        Args:
-            triangulated_graph_maximal_cliques - The max cliques of a triangulated graph
-
-        Returns:
-            junction_tree - The junction tree
-        """
-        from host.src.junction_tree import JunctionTree
-
-        # Construct a cluster graph from the maxcliques and weight the edges with the intersection size
-        # (https://youtu.be/TddbmU9dHgA?t=4544)
-        cluster_graph = MarkovNetwork()
-
-        # THIS IS EXTREMELY SLOW!!!!!!! CAN PROBABLY GET THIS FROM WITHIN THE VARIABLE ELIMINATION
-        # FUNCTION!!!!!!
-        for i, max_clique1 in enumerate( triangulated_graph_maximal_cliques ):
-            for j, max_clique2 in enumerate( triangulated_graph_maximal_cliques ):
-                if( i == j ):
-                    continue
-
-                intersection = max_clique1.intersection( max_clique2 )
-
-                # A cluster graph has edges when the clusters have intersection
-                if( len( intersection ) > 0 ):
-                    cluster_graph.add_edge( max_clique1, max_clique2, weight=len( intersection ) )
-
-        # Finally, find a maximal spanning tree for the cluster graph
-        return JunctionTree( nx.maximum_spanning_tree( cluster_graph ) )
