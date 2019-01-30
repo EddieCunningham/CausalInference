@@ -27,8 +27,13 @@ class DiscreteNetwork( MarkovNetwork ):
 
     @property
     def backend( self ):
-        return 'np'
-        # return 'tf'
+        if( hasattr( self, '_backend' ) == False ):
+            self.backend = 'np'
+        return self._backend
+
+    @backend.setter
+    def backend( self, val ):
+        self._backend = val
 
     def set_potentials( self, potentials ):
         """ Set the clique potentials.  THESE MUST BE IN LOG SPACE
@@ -317,23 +322,6 @@ class DiscreteNetwork( MarkovNetwork ):
 
         return contraction_lists
 
-    def message_object_type( self, *args, **kwargs ):
-        """ Function to correctly create the message objects
-
-        Args:
-            None
-
-        Returns:
-            None
-        """
-        if( self.backend == 'tf' ):
-            return tf.Variable( *args, **kwargs )
-        elif( self.backend == 'np' ):
-            return np.array( *args, **kwargs )
-        else:
-            assert 0, 'Need to specify backend'
-
-
     def stack_func( self, *args, **kwargs ):
         """ Function that can let us batch message objects depending on the current backend
 
@@ -382,7 +370,6 @@ class DiscreteNetwork( MarkovNetwork ):
         Returns:
             marginals - The node marginals
         """
-
         alphabet = string.ascii_letters
         contraction_iter = iter( contraction_lists )
 
@@ -439,7 +426,7 @@ class DiscreteNetwork( MarkovNetwork ):
 
                 contract = ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) ] ) + '->'
                 total = self.log_einsum( contract, data )
-                print( node, total, marginals[node] - total )
+                # print( node, total, marginals[node] - total )
 
         return marginals
 
@@ -512,8 +499,6 @@ class DiscreteNetwork( MarkovNetwork ):
                                                                                          return_junction_tree=True )
         # Create the junction tree and the computation instructions
         instructions = junction_tree.shafer_shenoy_inference_instructions()
-
-        junction_tree.draw( output_name='junction_tree' )
 
         # Generate the instructions to do inference
         supernode_potential_instructions = self.parse_max_clique_potential_instructions( max_clique_potential_instructions, junction_tree.nodes )

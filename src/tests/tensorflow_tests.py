@@ -11,7 +11,7 @@ __all__ = [ 'allTensorflowTests' ]
 
 def create_graph():
     # graph = DiscreteNetwork( nx.karate_club_graph() )
-    graph = DiscreteNetwork( nx.generators.balanced_tree( 3, 3 ) )
+    graph = DiscreteNetwork( nx.generators.balanced_tree( 5, 5 ) )
 
     # graph = DiscreteNetwork( nx.karate_club_graph() )
     # graph = DiscreteNetwork( nx.circular_ladder_graph( 7 ) )
@@ -19,6 +19,8 @@ def create_graph():
     # graph.draw()
     print( 'Number of nodes', len( list( graph.nodes ) ) )
     print( 'Number of edges', len( list( graph.edges ) ) )
+
+    graph.backend = 'tf'
 
     # Set the state sizes
     state_sizes = dict( [ ( node, 2 ) for node in graph.nodes ] )
@@ -43,6 +45,7 @@ def create_graph():
 def evidence_test():
 
     graph = nx.read_yaml( './host/tf_graph.yaml' )
+    graph.backend = 'tf'
 
     instructions = graph.get_computation_instructions( graph.best_elimination_order )
 
@@ -61,7 +64,9 @@ def allTensorflowTests():
 
     ######################################################
 
-    graph = DiscreteNetwork( nx.generators.balanced_tree( 3, 3 ) )
+    graph = DiscreteNetwork( nx.generators.balanced_tree( 5, 5 ) )
+    graph.backend = 'tf'
+
     state_sizes = dict( [ ( node, 2 ) for node in graph.nodes ] )
     graph.set_state_sizes( state_sizes )
 

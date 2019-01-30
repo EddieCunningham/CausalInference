@@ -149,15 +149,15 @@ def evidence_test():
     # graph = DiscreteNetwork( nx.generators.balanced_tree( 3, 3 ) )
 
     # graph = DiscreteNetwork( nx.karate_club_graph() )
-    graph = DiscreteNetwork( nx.circular_ladder_graph( 7 ) )
-    graph.remove_nodes_from( [ 0, 5 ] )
+    graph = DiscreteNetwork( nx.circular_ladder_graph( 5 ) )
+    # graph.remove_nodes_from( [ 0, 5 ] )
     graph.draw()
     print( 'Number of nodes', len( list( graph.nodes ) ) )
     print( 'Number of edges', len( list( graph.edges ) ) )
 
     # Set the state sizes
-    state_sizes = dict( [ ( node, 2 ) for node in graph.nodes ] )
-    # state_sizes = dict( [ ( node, np.random.randint( 3, 8 ) ) for node in graph.nodes ] )
+    # state_sizes = dict( [ ( node, 2 ) for node in graph.nodes ] )
+    state_sizes = dict( [ ( node, np.random.randint( 3, 8 ) ) for node in graph.nodes ] )
     graph.set_state_sizes( state_sizes )
 
     # Set the clique potentials
@@ -182,9 +182,6 @@ def evidence_test():
         p = p / p.sum()
         n_possible_states = np.random.choice( state_sizes[node], 1, p=p )[0]
         possible_states   = np.random.choice( state_sizes[node], n_possible_states, replace=False )
-
-        print( 'node', node )
-        print( 'possible_states', possible_states )
 
         nodes_with_evidence.append( node )
         data.append( possible_states )

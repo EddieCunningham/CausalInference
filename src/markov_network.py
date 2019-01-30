@@ -393,8 +393,8 @@ class MarkovNetwork( nx.Graph ):
             # Check to see if the current elimination clique is maximal.
             # There is probably a better way to do this
             if( return_maximal_cliques ):
-                is_maximal_clique = True
                 elimination_clique = self.build_clique( elimination_nodes )
+
 
                 # Check if the elimination clique is not a subset of any existing maximal clique
                 adjacent_clusters = self.find_adjacent_clusters( cluster_graph_nodes, elimination_clique )
@@ -421,7 +421,7 @@ class MarkovNetwork( nx.Graph ):
                     edge = tuple( sorted( [ cluster1, cluster2 ], key=lambda x: hash( x ) ) )
                     if( edge not in edge_weights ):
                         edge_weights[edge] = 0
-                    edge_weights[edge] += 1
+                    edge_weights[edge] += len( cluster1.intersection( cluster2 ) )
 
             # Create the cluster graph
             cluster_graph = MarkovNetwork()
@@ -430,6 +430,9 @@ class MarkovNetwork( nx.Graph ):
 
             # Create a maxium spanning tree from the cluster graph
             junction_tree = JunctionTree( nx.maximum_spanning_tree( cluster_graph ) )
+
+            if( draw == True ):
+                junction_tree.draw( output_name='junction_tree' )
 
             return order, factor_instructions, junction_tree
 

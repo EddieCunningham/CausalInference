@@ -232,12 +232,11 @@ class JunctionTree( MarkovNetwork ):
 
                 nodes_in        = tuple( potential_in.nodes )
                 nodes_out       = tuple( potential_out.nodes )
-                separator_nodes = tuple( potential_in.intersection( potential_out ) )
+                separator_nodes = tuple( sorted( potential_in.intersection( potential_out ) ) )
 
                 # Each edge represents a message
                 message           = MarkovNetwork.Message( nodes_in, nodes_out )
                 incoming_messages = [ MarkovNetwork.Message( tuple( neighbor.nodes ), nodes_in ) for neighbor in self.neighbors( nodes_in ) if neighbor != nodes_out ]
-
                 batch.append( JunctionTree.MessageInstruction( message, incoming_messages, separator_nodes ) )
 
             message_instructions.append( batch )
@@ -255,14 +254,3 @@ class JunctionTree( MarkovNetwork ):
         message_instructions.append( batch )
 
         return message_instructions
-
-    def recombination_instructions( self ):
-        """ How to combine messages to
-
-        Args:
-            None
-
-        Returns:
-            instructions - The instructions on how to perform inference
-        """
-        pass
