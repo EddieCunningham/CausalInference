@@ -232,7 +232,7 @@ class JunctionTree( MarkovNetwork ):
 
                 nodes_in        = tuple( potential_in.nodes )
                 nodes_out       = tuple( potential_out.nodes )
-                separator_nodes = tuple( sorted( potential_in.intersection( potential_out ) ) )
+                separator_nodes = tuple( potential_in.intersection( potential_out ) )
 
                 # Each edge represents a message
                 message           = MarkovNetwork.Message( nodes_in, nodes_out )

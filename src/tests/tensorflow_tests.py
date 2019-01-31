@@ -58,16 +58,16 @@ def evidence_test():
 
 def allTensorflowTests():
 
-    import cProfile, pstats, io
-    pr = cProfile.Profile()
-    pr.enable()
+    # import cProfile, pstats, io
+    # pr = cProfile.Profile()
+    # pr.enable()
 
     ######################################################
 
-    graph = DiscreteNetwork( nx.generators.balanced_tree( 5, 5 ) )
+    graph = DiscreteNetwork( nx.generators.karate_club_graph() )
     graph.backend = 'tf'
 
-    state_sizes = dict( [ ( node, 2 ) for node in graph.nodes ] )
+    state_sizes = dict( [ ( node, np.random.randint( 3, 8 ) ) for node in graph.nodes ] )
     graph.set_state_sizes( state_sizes )
 
     # Set the clique potentials
@@ -82,12 +82,12 @@ def allTensorflowTests():
 
     ######################################################
 
-    pr.disable()
-    s = io.StringIO()
-    sortby = 'cumulative'
-    ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
-    ps.print_stats()
-    print(s.getvalue())
+    # pr.disable()
+    # s = io.StringIO()
+    # sortby = 'cumulative'
+    # ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+    # ps.print_stats()
+    # print(s.getvalue())
 
     ######################################################
     ######################################################

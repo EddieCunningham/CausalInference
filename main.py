@@ -12,3 +12,8 @@ from host.src.tests.tensorflow_tests import *
 # allInferenceTests()
 # allMarkovNetworkTests()
 allTensorflowTests()
+
+
+# (1, 1, 2, 7, 3, 5, 1, 6)
+# (1, 1, 2, 1, 3, 1, 4, 6)
+

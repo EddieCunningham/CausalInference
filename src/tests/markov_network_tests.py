@@ -57,8 +57,8 @@ def junction_tree_conversion_test():
     print( 'is_jt', is_jt )
 
 def junction_tree_inference_test():
-    # graph = DiscreteNetwork( nx.karate_club_graph() )
-    graph = DiscreteNetwork( nx.generators.balanced_tree( 2, 2 ) )
+    graph = DiscreteNetwork( nx.karate_club_graph() )
+    # graph = DiscreteNetwork( nx.generators.balanced_tree( 2, 2 ) )
 
     # graph = DiscreteNetwork( nx.karate_club_graph() )
     # graph = DiscreteNetwork( nx.circular_ladder_graph( 7 ) )
@@ -148,8 +148,8 @@ def evidence_test():
     # graph = DiscreteNetwork( nx.karate_club_graph() )
     # graph = DiscreteNetwork( nx.generators.balanced_tree( 3, 3 ) )
 
-    # graph = DiscreteNetwork( nx.karate_club_graph() )
-    graph = DiscreteNetwork( nx.circular_ladder_graph( 5 ) )
+    graph = DiscreteNetwork( nx.karate_club_graph() )
+    # graph = DiscreteNetwork( nx.circular_ladder_graph( 5 ) )
     # graph.remove_nodes_from( [ 0, 5 ] )
     graph.draw()
     print( 'Number of nodes', len( list( graph.nodes ) ) )
@@ -186,7 +186,7 @@ def evidence_test():
         nodes_with_evidence.append( node )
         data.append( possible_states )
 
-    graph.add_evidence( nodes_with_evidence, data )
+    # graph.add_evidence( nodes_with_evidence, data )
 
     ######################################################
 

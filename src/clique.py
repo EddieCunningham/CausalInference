@@ -74,7 +74,7 @@ class Clique():
         assert isinstance( other_clique, Clique )
 
         intersection = self.hash_keys.intersection( other_clique.hash_keys )
-        return [ self.nodes[self.hash_map[h]] for h in intersection ]
+        return sorted( [ self.nodes[self.hash_map[h]] for h in intersection ], key=lambda x: hash( x ) )
 
     def union( self, other_clique ):
         """ Nodes shared with other_clique
@@ -88,7 +88,8 @@ class Clique():
         assert isinstance( other_clique, Clique )
 
         union = self.hash_keys.union( other_clique.hash_keys )
-        return [ self.nodes[self.hash_map[h]] if h in self.hash_map else other_clique.nodes[other_clique.hash_map[h]] for h in union ]
+        nodes = [ self.nodes[self.hash_map[h]] if h in self.hash_map else other_clique.nodes[other_clique.hash_map[h]] for h in union ]
+        return sorted( nodes, key=lambda x: hash( x ) )
 
     def difference( self, other_clique ):
         """ The nodes in this clique that are not in other_clique
@@ -102,7 +103,7 @@ class Clique():
         assert isinstance( other_clique, Clique )
 
         difference = self.hash_keys.difference( other_clique.hash_keys )
-        return [ self.nodes[self.hash_map[h]] for h in difference ]
+        return sorted( [ self.nodes[self.hash_map[h]] for h in difference ], key=lambda x: hash( x ) )
 
     @staticmethod
     def edges_for( nodes ):

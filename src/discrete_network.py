@@ -426,6 +426,8 @@ class DiscreteNetwork( MarkovNetwork ):
 
                 contract = ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) ] ) + '->'
                 total = self.log_einsum( contract, data )
+                # print( node, total.numpy() )
+                print( total )
                 # print( node, total, marginals[node] - total )
 
         return marginals

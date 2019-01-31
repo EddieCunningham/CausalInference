@@ -18,7 +18,9 @@ def real_integrate( x, axis ):
     return tf.reduce_sum( x, axis=axis )
 
 def log_product( x, y ):
-    return x + y
+    # print( x.shape, y.shape )
+    return tf.add( x, y )
+    # return x + y
 
 def log_integrate( x, axis ):
     return tf.reduce_logsumexp( x, axis=axis )
@@ -59,7 +61,7 @@ def log_einsum_tf( contract, *args, contraction_list=None, _test=False ):
     operands = list( args )
 
     # Find the unique letters in the contract and allocate a list for the final transpose
-    unique_letters = ''.join( sorted( set( contract ) ) ).replace( ',', '' )
+    unique_letters = ''.join( sorted( set( contract ) ) ).replace( ',', '' ).replace( '-', '' ).replace( '>', '' )
     n_unique_letters = len( unique_letters )
     transpose_back = [ 0 for _ in unique_letters ]
 
@@ -75,6 +77,9 @@ def log_einsum_tf( contract, *args, contraction_list=None, _test=False ):
             left_operand, right_operand = tmp_operands
             input_left, input_right = input_str.split( ',' )
 
+            assert len( left_operand.shape ) == len( input_left )
+            assert len( right_operand.shape ) == len( input_right )
+
             # Want to transpose the operands to be in alphabetical order so that multiplying them is easy
             not_in_left  = ''.join( [ letter for letter in unique_letters if letter not in input_left ] )
             not_in_right = ''.join( [ letter for letter in unique_letters if letter not in input_right ] )
@@ -86,14 +91,21 @@ def log_einsum_tf( contract, *args, contraction_list=None, _test=False ):
             transpose_right = tuple( [ right_shape.index( letter ) for letter in unique_letters ] )
 
             # Extend the axes of the operands and transpose them
-            shape_left  = list( left_operand.shape )  + [ 1 for _ in range( len( left_operand.shape ), n_unique_letters ) ]
-            shape_right = list( right_operand.shape ) + [ 1 for _ in range( len( right_operand.shape ), n_unique_letters ) ]
+            shape_left  = list( left_operand.shape )  + [ tf.Dimension( 1 ) for _ in range( len( left_operand.shape ), n_unique_letters ) ]
+            shape_right = list( right_operand.shape ) + [ tf.Dimension( 1 ) for _ in range( len( right_operand.shape ), n_unique_letters ) ]
 
             reshaped_left_no_transpose = tf.reshape( left_operand, tuple( shape_left ) )
             reshaped_right_no_transpose = tf.reshape( right_operand, tuple( shape_right ) )
 
             reshaped_left  = tf.transpose( reshaped_left_no_transpose, transpose_left )
             reshaped_right = tf.transpose( reshaped_right_no_transpose, transpose_right )
+
+            # Workaround for broadcasting dimensions greater than 6
+            if( len( reshaped_left.shape ) >= 6 ):
+                left_tile  = [ r if ( i >= 5 and l == 1 ) else 1 for i, ( l, r ) in enumerate( zip( reshaped_left.shape, reshaped_right.shape ) ) ]
+                right_tile = [ l if ( i >= 5 and r == 1 ) else 1 for i, ( l, r ) in enumerate( zip( reshaped_left.shape, reshaped_right.shape ) ) ]
+                reshaped_left  = tf.tile( reshaped_left, left_tile )
+                reshaped_right = tf.tile( reshaped_right, right_tile )
 
             # Sum up the terms
             summed = product( reshaped_left, reshaped_right )
@@ -110,16 +122,22 @@ def log_einsum_tf( contract, *args, contraction_list=None, _test=False ):
             if( len( idx_rm ) > 0 ):
                 remove_idx = tuple( list( range( len( results_index ), n_unique_letters ) ) )
                 new_view = integrate( swapped_summed, axis=remove_idx )
+                # print( 'here0', len( remove_idx ) )
             else:
                 # Don't squeeze the first dim!  This messes things up if we have a batch size of 1!
-                trailing_ones = tuple( [ i for i, s in enumerate( swapped_summed.shape ) if s == 1 and i > 0 ] )
-                new_view = tf.squeeze( swapped_summed, axis=trailing_ones )
+                trailing_ones = tuple( [ i for i, s in enumerate( swapped_summed.shape ) if s.value == 1 and i > 0 ] )
+                if( len( trailing_ones ) == 0 ):
+                    new_view = swapped_summed
+                else:
+                    new_view = tf.squeeze( swapped_summed, axis=trailing_ones )
+                # print( 'here1', swapped_summed.shape, new_view.shape, trailing_ones )
 
         else:
 
             # Then we just need to do an integration step
             remove_idx = tuple( [ input_str.index( letter ) for letter in idx_rm ] )
             new_view = integrate( tmp_operands[0], axis=remove_idx )
+            # print( 'here2', len( remove_idx ) )
 
         # Append new items and dereference what we can
         operands.append( new_view )

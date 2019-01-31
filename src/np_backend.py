@@ -86,7 +86,7 @@ def log_einsum_np( contract, *args, contraction_list=None, _test=False ):
     operands = list( args )
 
     # Find the unique letters in the contract and allocate a list for the final transpose
-    unique_letters = ''.join( sorted( set( contract ) ) ).replace( ',', '' )
+    unique_letters = ''.join( sorted( set( contract ) ) ).replace( ',', '' ).replace( '-', '' ).replace( '>', '' )
     n_unique_letters = len( unique_letters )
     transpose_back = [ 0 for _ in unique_letters ]
 
@@ -136,7 +136,10 @@ def log_einsum_np( contract, *args, contraction_list=None, _test=False ):
             else:
                 # Don't squeeze the first dim!  This messes things up if we have a batch size of 1!
                 trailing_ones = tuple( [ i for i, s in enumerate( swapped_summed.shape ) if s == 1 and i > 0 ] )
-                new_view = swapped_summed.squeeze( axis=trailing_ones )
+                if( len( trailing_ones ) == 0 ):
+                    new_view = swapped_summed
+                else:
+                    new_view = swapped_summed.squeeze( axis=trailing_ones )
 
         else:
 
