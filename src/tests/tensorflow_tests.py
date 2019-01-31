@@ -56,11 +56,11 @@ def evidence_test():
 
     print( 'Total computation time', time.time() - comp_start )
 
-def allTensorflowTests():
+def profile_test():
 
-    # import cProfile, pstats, io
-    # pr = cProfile.Profile()
-    # pr.enable()
+    import cProfile, pstats, io
+    pr = cProfile.Profile()
+    pr.enable()
 
     ######################################################
 
@@ -82,19 +82,36 @@ def allTensorflowTests():
 
     ######################################################
 
-    # pr.disable()
-    # s = io.StringIO()
-    # sortby = 'cumulative'
-    # ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
-    # ps.print_stats()
-    # print(s.getvalue())
+    pr.disable()
+    s = io.StringIO()
+    sortby = 'cumulative'
+    ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+    ps.print_stats()
+    print(s.getvalue())
 
-    ######################################################
-    ######################################################
-    ######################################################
-    ######################################################
-    ######################################################
+def gradient_test():
+
+    graph = DiscreteNetwork( nx.generators.karate_club_graph() )
+    graph.backend = 'tf'
+
+    state_sizes = dict( [ ( node, np.random.randint( 3, 8 ) ) for node in graph.nodes ] )
+    graph.set_state_sizes( state_sizes )
+
+    # Set the clique potentials
+    max_cliques = [ tuple( sorted( x ) ) for x in nx.find_cliques( graph )  ]
+    clique_sizes = [ tuple( [ state_sizes[node] for node in max_clique ] ) for max_clique in max_cliques ]
+    potentials = dict( [ ( max_clique, tf.Variable( np.random.random( clique_size ) ) ) for max_clique, clique_size in zip( max_cliques, clique_sizes ) ] )
+    graph.set_potentials( potentials )
+
+    print( 'Starting to find best elimination order' )
+    order, fastest_time = graph.find_best_elimination_order( n_iters=1 )
+    instructions = graph.get_computation_instructions( order )
+    messages = graph.perform_message_passing( *instructions )
+
+def allTensorflowTests():
 
     # create_graph()
     # evidence_test()
+    # profile_test()
+    gradient_test()
     print( 'Completed all tensorflow tests' )

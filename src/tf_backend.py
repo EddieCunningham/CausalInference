@@ -102,8 +102,8 @@ def log_einsum_tf( contract, *args, contraction_list=None, _test=False ):
 
             # Workaround for broadcasting dimensions greater than 6
             if( len( reshaped_left.shape ) >= 6 ):
-                left_tile  = [ r if ( i >= 5 and l == 1 ) else 1 for i, ( l, r ) in enumerate( zip( reshaped_left.shape, reshaped_right.shape ) ) ]
-                right_tile = [ l if ( i >= 5 and r == 1 ) else 1 for i, ( l, r ) in enumerate( zip( reshaped_left.shape, reshaped_right.shape ) ) ]
+                left_tile  = [ r if ( l == 1 ) else 1 for i, ( l, r ) in enumerate( zip( reshaped_left.shape, reshaped_right.shape ) ) ]
+                right_tile = [ l if ( r == 1 ) else 1 for i, ( l, r ) in enumerate( zip( reshaped_left.shape, reshaped_right.shape ) ) ]
                 reshaped_left  = tf.tile( reshaped_left, left_tile )
                 reshaped_right = tf.tile( reshaped_right, right_tile )
 
@@ -122,7 +122,6 @@ def log_einsum_tf( contract, *args, contraction_list=None, _test=False ):
             if( len( idx_rm ) > 0 ):
                 remove_idx = tuple( list( range( len( results_index ), n_unique_letters ) ) )
                 new_view = integrate( swapped_summed, axis=remove_idx )
-                # print( 'here0', len( remove_idx ) )
             else:
                 # Don't squeeze the first dim!  This messes things up if we have a batch size of 1!
                 trailing_ones = tuple( [ i for i, s in enumerate( swapped_summed.shape ) if s.value == 1 and i > 0 ] )
@@ -130,14 +129,12 @@ def log_einsum_tf( contract, *args, contraction_list=None, _test=False ):
                     new_view = swapped_summed
                 else:
                     new_view = tf.squeeze( swapped_summed, axis=trailing_ones )
-                # print( 'here1', swapped_summed.shape, new_view.shape, trailing_ones )
 
         else:
 
             # Then we just need to do an integration step
             remove_idx = tuple( [ input_str.index( letter ) for letter in idx_rm ] )
             new_view = integrate( tmp_operands[0], axis=remove_idx )
-            # print( 'here2', len( remove_idx ) )
 
         # Append new items and dereference what we can
         operands.append( new_view )
