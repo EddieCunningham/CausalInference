@@ -6,10 +6,8 @@ from host.src.clique import DiscreteClique
 import string
 from functools import reduce
 from collections import namedtuple, Iterable
-from .tf_backend import log_einsum_tf
 from .np_backend import log_einsum_np, log_einsum_path
 from timeit import default_timer as timer
-import tensorflow as tf
 
 class DiscreteNetwork( MarkovNetwork ):
 
@@ -25,16 +23,6 @@ class DiscreteNetwork( MarkovNetwork ):
     BatchedInstruction = namedtuple( 'BatchedInstruction', [ 'batch_contract', 'instruction' ] )
     MessageSize = namedtuple( 'MessageSize', [ 'nodes', 'state_sizes' ] )
 
-    @property
-    def backend( self ):
-        if( hasattr( self, '_backend' ) == False ):
-            self.backend = 'np'
-        return self._backend
-
-    @backend.setter
-    def backend( self, val ):
-        self._backend = val
-
     def set_potentials( self, potentials ):
         """ Set the clique potentials.  THESE MUST BE IN LOG SPACE
 
@@ -47,8 +35,7 @@ class DiscreteNetwork( MarkovNetwork ):
         assert isinstance( potentials, dict )
         for nodes, value in potentials.items():
             assert tuple( sorted( nodes ) ) == nodes
-            if( self.backend == 'np' ):
-                assert isinstance( value, np.ndarray )
+            assert isinstance( value, np.ndarray )
         self.potentials          = potentials
         self.evidence_potentials = potentials
 
@@ -322,38 +309,6 @@ class DiscreteNetwork( MarkovNetwork ):
 
         return contraction_lists
 
-    def stack_func( self, *args, **kwargs ):
-        """ Function that can let us batch message objects depending on the current backend
-
-        Args:
-            None
-
-        Returns:
-            None
-        """
-        if( self.backend == 'tf' ):
-            return tf.stack( *args, **kwargs )
-        elif( self.backend == 'np' ):
-            return np.array( *args, **kwargs )
-        else:
-            assert 0, 'Need to specify backend'
-
-    def log_einsum( self, *args, **kwargs ):
-        """ Function that can let us batch message objects depending on the current backend
-
-        Args:
-            None
-
-        Returns:
-            None
-        """
-        if( self.backend == 'tf' ):
-            return log_einsum_tf( *args, **kwargs )
-        elif( self.backend == 'np' ):
-            return log_einsum_np( *args, **kwargs )
-        else:
-            assert 0, 'Need to specify backend'
-
     def perform_message_passing( self,
                                  supernode_potential_instructions,
                                  messages,
@@ -370,67 +325,9 @@ class DiscreteNetwork( MarkovNetwork ):
         Returns:
             marginals - The node marginals
         """
-        alphabet = string.ascii_letters
-        contraction_iter = iter( contraction_lists )
-
         # Build the clique potentials
         potentials = self.evidence_potentials.copy()
-
-        for node_to_eliminate, nodes, other_potentials, contract, keep in supernode_potential_instructions:
-
-            # Create the new factor
-            if( keep ):
-                all_nodes = tuple( sorted( [ node_to_eliminate ] + list( nodes ) ) )
-                new_contract, reduced_contract = contract.split( '->' )
-                expanded_contract = ''.join( sorted( list( set( new_contract ) ) ) ).replace( ',', '' )
-                new_contract += '->' + expanded_contract
-                potentials[all_nodes] = self.log_einsum( new_contract, *[ potentials[other_nodes] for other_nodes in other_potentials ], contraction_list=next( contraction_iter ) )
-                potentials[nodes] = self.log_einsum( expanded_contract + '->' + reduced_contract, potentials[all_nodes], contraction_list=next( contraction_iter ) )
-            else:
-                potentials[nodes] = self.log_einsum( contract, *[ potentials[other_nodes] for other_nodes in other_potentials ], contraction_list=next( contraction_iter ) )
-
-        # Perform the inference computations
-        message_objects = dict( [ ( message, None ) for message, s in messages.items() ] )
-        for batched_contract, instructions in computation_instructions:
-
-            # Find the potential objects
-            all_potentials = self.stack_func( [ potentials[instruction.nodes_in_potential] for instruction in instructions ] )
-
-            # Batch the incoming message objects
-            incoming_message_batches = zip( *[ instruction.incoming_messages for instruction in instructions ] )
-            incoming_message_tensors = [ self.stack_func( [ message_objects[message] for message in message_batch ] ) for message_batch in incoming_message_batches ]
-
-            # Do the actual computation
-            message = self.log_einsum( batched_contract, all_potentials, *incoming_message_tensors, contraction_list=next( contraction_iter ) )
-
-            # Copy the results back to the appropriate message objects
-            for i, instruction in enumerate( instructions ):
-                message_objects[instruction.message] = message[i]
-
-        # Collect the clique potentials
-        marginals = {}
-        for ( nodes, _ ), data in filter( lambda x: x[0][0]==x[0][1], message_objects.items() ):
-
-            # See which marginals are needed within this cluster
-            needed = [ node for node in nodes if node not in marginals ]
-
-            # print( nodes )
-
-            potential = potentials[nodes]
-
-            for node in needed:
-
-                contract = ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) ] )
-                contract += '->' + ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) if _node == node ] )
-                marginals[node] = self.log_einsum( contract, data )
-
-                contract = ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) ] ) + '->'
-                total = self.log_einsum( contract, data )
-                # print( node, total.numpy() )
-                print( total )
-                # print( node, total, marginals[node] - total )
-
-        return marginals
+        return DiscreteNetwork.run_message_passing( potentials, supernode_potential_instructions, messages, computation_instructions, contraction_lists )
 
     def find_best_elimination_order( self, n_iters=100, runs_to_average=3 ):
         """ Find the elimination order that gives the most efficient computation instructions
@@ -510,3 +407,87 @@ class DiscreteNetwork( MarkovNetwork ):
         contraction_lists = self.generate_contractions( supernode_potential_instructions, separators, computation_instructions )
 
         return supernode_potential_instructions, separators, computation_instructions, contraction_lists
+
+    @staticmethod
+    def run_message_passing( potentials,
+                         supernode_potential_instructions,
+                         messages,
+                         computation_instructions,
+                         contraction_lists ):
+        """ Actually do the computations
+
+        Args:
+            supernode_potential_instructions - How to get the supernode potentials
+            messages                         - Holds the nodes that the separator encapsulates and the state sizes for the nodes
+            computation_instructions         - Actually what to do
+            contraction_lists                - The order of contractions to perform at each log_einsum step
+
+        Returns:
+            marginals - The node marginals
+        """
+
+        def stack_func( *args, **kwargs ):
+            return np.array( *args, **kwargs )
+
+        def log_einsum( *args, **kwargs ):
+            return log_einsum_np( *args, **kwargs )
+
+        alphabet = string.ascii_letters
+        contraction_iter = iter( contraction_lists )
+
+        # Build the clique potentials
+        for node_to_eliminate, nodes, other_potentials, contract, keep in supernode_potential_instructions:
+
+            # Create the new factor
+            if( keep ):
+                all_nodes = tuple( sorted( [ node_to_eliminate ] + list( nodes ) ) )
+                new_contract, reduced_contract = contract.split( '->' )
+                expanded_contract = ''.join( sorted( list( set( new_contract ) ) ) ).replace( ',', '' )
+                new_contract += '->' + expanded_contract
+                potentials[all_nodes] = log_einsum( new_contract, *[ potentials[other_nodes] for other_nodes in other_potentials ], contraction_list=next( contraction_iter ) )
+                potentials[nodes] = log_einsum( expanded_contract + '->' + reduced_contract, potentials[all_nodes], contraction_list=next( contraction_iter ) )
+            else:
+                potentials[nodes] = log_einsum( contract, *[ potentials[other_nodes] for other_nodes in other_potentials ], contraction_list=next( contraction_iter ) )
+
+        # Perform the inference computations
+        message_objects = dict( [ ( message, None ) for message, s in messages.items() ] )
+        for batched_contract, instructions in computation_instructions:
+
+            # Find the potential objects
+            all_potentials = stack_func( [ potentials[instruction.nodes_in_potential] for instruction in instructions ] )
+
+            # Batch the incoming message objects
+            incoming_message_batches = zip( *[ instruction.incoming_messages for instruction in instructions ] )
+            incoming_message_tensors = [ stack_func( [ message_objects[message] for message in message_batch ] ) for message_batch in incoming_message_batches ]
+
+            # Do the actual computation
+            message = log_einsum( batched_contract, all_potentials, *incoming_message_tensors, contraction_list=next( contraction_iter ) )
+
+            # Copy the results back to the appropriate message objects
+            for i, instruction in enumerate( instructions ):
+                message_objects[instruction.message] = message[i]
+
+        # Collect the clique potentials
+        marginals = {}
+        for ( nodes, _ ), data in filter( lambda x: x[0][0]==x[0][1], message_objects.items() ):
+
+            # See which marginals are needed within this cluster
+            needed = [ node for node in nodes if node not in marginals ]
+
+            # print( nodes )
+
+            potential = potentials[nodes]
+
+            for node in needed:
+
+                contract = ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) ] )
+                contract += '->' + ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) if _node == node ] )
+                marginals[node] = log_einsum( contract, data )
+
+                contract = ''.join( [ alphabet[i] for i, _node in enumerate( nodes ) ] ) + '->'
+                total = log_einsum( contract, data )
+                # print( node, total.numpy() )
+                # print( total )
+                # print( node, total, marginals[node] - total )
+
+        return marginals

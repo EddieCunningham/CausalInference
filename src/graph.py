@@ -1,7 +1,6 @@
 import numpy as np
 import itertools
 from .draw import _DrawingMixin
-from .clique_tree import _AlgorithmMixin
 from collections import deque
 
 __all__ = [ 'Graph' ]
@@ -300,5 +299,5 @@ class _PolytreeBaseMixin():
 
 ##########################################################################
 
-class Graph( _PolytreeBaseMixin, _DrawingMixin, _AlgorithmMixin ):
+class Graph( _PolytreeBaseMixin, _DrawingMixin ):
     pass
