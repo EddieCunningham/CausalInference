@@ -10,6 +10,7 @@ RUN apt-get update && \
 
 # Install the latest versions of these python packages
 RUN python -m pip install --upgrade pip && \
+    pip uninstall numpy -y && \
     pip install --user numpy scipy pandas bokeh cython networkx graphviz \
     pygraphviz PyQt5 matplotlib opt_einsum autograd jax jaxlib
 
